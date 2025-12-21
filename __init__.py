@@ -17,6 +17,11 @@ if TYPE_CHECKING:
 
 # Module names for registration (order matters for dependencies)
 _module_names: tuple[str, ...] = (
+    "properties",
+    "typing_utils",
+    "sockets",
+    "msgbus",
+    "chunks",
     "operators",
     "panels",
 )
@@ -69,10 +74,24 @@ def register() -> None:
     """Register all addon classes with Blender."""
     import bpy
 
+    from . import chunks, msgbus, operators, properties
+
     _import_modules()
 
     for cls in _get_classes():
         bpy.utils.register_class(cls)
+
+    # Register scene properties
+    properties.register_scene_properties()
+
+    # Register viewport draw handler
+    chunks.register_draw_handler()
+
+    # Register message bus for real-time socket change detection
+    msgbus.register_msgbus()
+
+    # Add to File > Export menu
+    bpy.types.TOPBAR_MT_file_export.append(operators.menu_func_export)
 
     print(f"[{__package__}] Addon registered successfully")
 
@@ -85,6 +104,20 @@ def unregister() -> None:
     import contextlib
 
     import bpy
+
+    from . import chunks, msgbus, operators, properties
+
+    # Unregister message bus subscriptions
+    msgbus.unregister_msgbus()
+
+    # Unregister viewport draw handler
+    chunks.unregister_draw_handler()
+
+    # Remove from File > Export menu
+    bpy.types.TOPBAR_MT_file_export.remove(operators.menu_func_export)
+
+    # Unregister scene properties first
+    properties.unregister_scene_properties()
 
     # Unregister in reverse order
     for cls in reversed(_get_classes()):
