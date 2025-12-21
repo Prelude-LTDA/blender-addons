@@ -1,0 +1,63 @@
+schema_version = "1.0.0"
+
+# Unique identifier for the extension
+id = "voxel_terrain"
+version = "1.0.0"
+name = "Voxel Terrain"
+tagline = "Voxel-based terrain generation and editing tools"
+maintainer = "Your Name <your.email@example.com>"
+
+# Extension type
+type = "add-on"
+
+# Optional: link to documentation, support, source files, etc
+# website = "https://github.com/yourusername/voxel-terrain"
+
+# Optional: tag list - see https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
+tags = ["Mesh", "Object"]
+
+# Blender version compatibility - targeting 5.0 and up
+blender_version_min = "5.0.0"
+# blender_version_max = "6.0.0"
+
+# License conforming to https://spdx.org/licenses/
+license = [
+    "SPDX:GPL-3.0-or-later",
+]
+
+# Optional: copyright notice
+copyright = [
+    "2025 Your Name",
+]
+
+# Optional: list of supported platforms (omit for all platforms)
+# platforms = ["windows-x64", "macos-arm64", "linux-x64", "windows-arm64", "macos-x64"]
+
+# Optional: bundle 3rd party Python modules
+# wheels = []
+
+# Optional: permissions
+# [permissions]
+# network = "Reason for network access"
+# files = "Reason for file access"
+# clipboard = "Reason for clipboard access"
+
+# Build settings
+[build]
+paths_exclude_pattern = [
+    "__pycache__/",
+    ".*",
+    "*.zip",
+    ".git/",
+    ".vscode/",
+    "*.pyc",
+    "*.pyo",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    "pyrightconfig.json",
+    "pyproject.toml",
+    ".python-version",
+    "requirements*.txt",
+    "dev/",
+    "tests/",
+]

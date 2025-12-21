@@ -1,0 +1,138 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Type Check",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/pyright",
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Type Check (Verbose)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/pyright",
+            "args": [
+                "--verbose"
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Lint",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/ruff",
+            "args": [
+                "check",
+                "."
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Lint (Fix)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/ruff",
+            "args": [
+                "check",
+                "--fix",
+                "."
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Format",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/ruff",
+            "args": [
+                "format",
+                "."
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Format (Check)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/ruff",
+            "args": [
+                "format",
+                "--check",
+                "."
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Format (Diff)",
+            "type": "shell",
+            "command": "${workspaceFolder}/.venv/bin/ruff",
+            "args": [
+                "format",
+                "--diff",
+                "."
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Check All",
+            "dependsOn": [
+                "Type Check",
+                "Lint",
+                "Format (Check)"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Fix All",
+            "dependsOn": [
+                "Lint (Fix)",
+                "Format"
+            ],
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}

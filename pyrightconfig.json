@@ -1,0 +1,25 @@
+{
+    "pythonVersion": "3.11",
+    "typeCheckingMode": "standard",
+    "venvPath": ".",
+    "venv": ".venv",
+    "reportMissingImports": true,
+    "reportMissingTypeStubs": false,
+    "reportUnusedImport": true,
+    "reportUnusedClass": true,
+    "reportUnusedFunction": true,
+    "reportUnusedVariable": true,
+    "reportDuplicateImport": true,
+    "reportMissingModuleSource": false,
+    "exclude": [
+        "**/__pycache__",
+        ".venv",
+        ".git"
+    ],
+    "executionEnvironments": [
+        {
+            "root": ".",
+            "extraPaths": [".venv/lib/python3.11/site-packages"]
+        }
+    ]
+}
