@@ -327,6 +327,25 @@ class VOXELTERRAIN_PT_object_panel(bpy.types.Panel):
             icon="OBJECT_DATA",
         )
 
+    def _draw_modifier_missing_ui(
+        self,
+        layout: bpy.types.UILayout,
+    ) -> None:
+        """Draw the modifier missing warning and recreate button."""
+        box = layout.box()
+        box.alert = True
+        row = box.row()
+        row.alignment = "CENTER"
+        row.scale_y = 0.8
+        row.label(text="Modifier is missing", icon="ERROR")
+        row = box.row()
+        row.alert = False
+        row.operator(
+            "voxel_terrain.sync_to_modifier",
+            text="Recreate Modifier",
+            icon="MODIFIER",
+        )
+
     def _draw_socket_sync_ui(
         self,
         layout: bpy.types.UILayout,
@@ -375,10 +394,14 @@ class VOXELTERRAIN_PT_object_panel(bpy.types.Panel):
         # Check if modifier's node_group differs from our property
         modifier = _find_voxel_terrain_modifier(obj)
         modifier_ng = None
+        modifier_missing = False
         out_of_sync = False
         if modifier is not None:
             modifier_ng = getattr(modifier, "node_group", None)
             out_of_sync = modifier_ng != props.node_group
+        elif props.node_group is not None:
+            # Modifier was removed but we still have a node group
+            modifier_missing = True
 
         # Subscribe to the node group for real-time socket updates
         if props.node_group is not None:
@@ -396,7 +419,9 @@ class VOXELTERRAIN_PT_object_panel(bpy.types.Panel):
         layout.use_property_split = True
 
         # Show sync buttons if modifier differs, otherwise show "Show Modifier"
-        if out_of_sync:
+        if modifier_missing:
+            self._draw_modifier_missing_ui(layout)
+        elif out_of_sync:
             self._draw_modifier_sync_ui(layout, props, modifier_ng)
         elif props.node_group is not None:
             # Show Modifier button (only when in sync)
@@ -410,7 +435,7 @@ class VOXELTERRAIN_PT_object_panel(bpy.types.Panel):
         effective_ng = modifier_ng if out_of_sync and modifier_ng else props.node_group
 
         # Sync sockets button - only enabled when sockets don't match
-        if effective_ng is not None and not out_of_sync:
+        if effective_ng is not None and not out_of_sync and not modifier_missing:
             sockets_match = check_sockets_match(effective_ng)
             self._draw_socket_sync_ui(layout, sockets_match)
 

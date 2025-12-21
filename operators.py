@@ -521,11 +521,13 @@ class VOXELTERRAIN_OT_sync_to_modifier(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context: Context) -> bool:
-        """Only enabled if modifier exists."""
+        """Enabled if we have a node group to sync."""
         obj = context.object
         if obj is None:
             return False
-        return _find_voxel_terrain_modifier(obj) is not None
+        props = get_object_props(obj)
+        # Allow if we have a node group (modifier can be recreated)
+        return props.node_group is not None
 
     def execute(self, context: Context) -> set[OperatorReturnItems]:
         """Execute the operator."""
@@ -534,9 +536,14 @@ class VOXELTERRAIN_OT_sync_to_modifier(bpy.types.Operator):
         props = get_object_props(obj)
 
         modifier = _find_voxel_terrain_modifier(obj)
+
+        # Recreate modifier if it was deleted
         if modifier is None:
-            self.report({"WARNING"}, "Voxel Terrain modifier not found")
-            return {"CANCELLED"}
+            modifier = obj.modifiers.new(name=VOXEL_TERRAIN_MODIFIER_NAME, type="NODES")
+            modifier.show_viewport = False
+            modifier.show_render = False
+            modifier.show_expanded = False
+            self.report({"INFO"}, "Recreated Voxel Terrain modifier")
 
         modifier.node_group = props.node_group  # type: ignore[union-attr]
 
