@@ -32,6 +32,7 @@ voxel-terrain/
 ## Development Setup
 
 1. **Create a virtual environment:**
+
    ```bash
    python3.11 -m venv .venv
    source .venv/bin/activate  # On macOS/Linux
@@ -40,6 +41,7 @@ voxel-terrain/
    ```
 
 2. **Install development dependencies:**
+
    ```bash
    pip install -e ".[dev]"
    ```

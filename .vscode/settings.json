@@ -6,7 +6,6 @@
     "python.analysis.extraPaths": [
         "${workspaceFolder}/.venv/lib/python3.11/site-packages"
     ],
-    
     "[python]": {
         "editor.formatOnSave": true,
         "editor.codeActionsOnSave": {
@@ -15,19 +14,16 @@
         },
         "editor.defaultFormatter": "charliermarsh.ruff"
     },
-    
     "ruff.enable": true,
     "ruff.lint.run": "onSave",
     "ruff.format.args": [],
     "ruff.organizeImports": true,
-    
     "files.exclude": {
         "**/__pycache__": true,
         "**/.mypy_cache": true,
         "**/.ruff_cache": true,
         "**/*.pyc": true
     },
-    
     "files.associations": {
         "blender_manifest.toml": "toml"
     }

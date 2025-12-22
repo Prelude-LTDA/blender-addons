@@ -4,6 +4,7 @@ Chunk calculation and visualization for Voxel Terrain.
 This module handles:
 - Calculating chunk bounds from terrain-enabled objects
 - Drawing chunk wireframes in the viewport
+- Highlighting the currently processing chunk during generation
 """
 
 from __future__ import annotations
@@ -24,6 +25,32 @@ from .typing_utils import get_object_props, get_scene_props
 
 # Draw handler reference (set during registration)
 _draw_handler: object | None = None
+
+# Current processing chunk state (set by generation operators)
+# Contains: (chunk_min, chunk_max, skirt_min, skirt_max)
+_current_processing_chunk: tuple[
+    tuple[float, float, float],  # chunk min bounds
+    tuple[float, float, float],  # chunk max bounds
+    tuple[float, float, float],  # skirt min bounds
+    tuple[float, float, float],  # skirt max bounds
+] | None = None
+
+
+def set_current_processing_chunk(
+    chunk_min: tuple[float, float, float],
+    chunk_max: tuple[float, float, float],
+    skirt_min: tuple[float, float, float],
+    skirt_max: tuple[float, float, float],
+) -> None:
+    """Set the current chunk being processed (for overlay visualization)."""
+    global _current_processing_chunk  # noqa: PLW0603
+    _current_processing_chunk = (chunk_min, chunk_max, skirt_min, skirt_max)
+
+
+def clear_current_processing_chunk() -> None:
+    """Clear the current processing chunk highlight."""
+    global _current_processing_chunk  # noqa: PLW0603
+    _current_processing_chunk = None
 
 
 @dataclass
@@ -508,6 +535,104 @@ def _draw_voxel_grids(
                 sel_grid_batch.draw(shader)
 
 
+def _draw_processing_chunk_highlight(
+    shader: gpu.types.GPUShader,
+) -> None:
+    """Draw a highlight around the currently processing chunk."""
+    if _current_processing_chunk is None:
+        return
+
+    chunk_min, chunk_max, skirt_min, skirt_max = _current_processing_chunk
+
+    # Draw the chunk bounds as a solid wireframe box
+    x0, y0, z0 = chunk_min
+    x1, y1, z1 = chunk_max
+
+    # 8 corners of the chunk box
+    chunk_vertices: list[tuple[float, float, float]] = [
+        (x0, y0, z0),  # 0
+        (x1, y0, z0),  # 1
+        (x1, y1, z0),  # 2
+        (x0, y1, z0),  # 3
+        (x0, y0, z1),  # 4
+        (x1, y0, z1),  # 5
+        (x1, y1, z1),  # 6
+        (x0, y1, z1),  # 7
+    ]
+
+    # 12 edges of the chunk box
+    chunk_edges: list[tuple[int, int]] = [
+        # Bottom face
+        (0, 1), (1, 2), (2, 3), (3, 0),
+        # Top face
+        (4, 5), (5, 6), (6, 7), (7, 4),
+        # Vertical edges
+        (0, 4), (1, 5), (2, 6), (3, 7),
+    ]
+
+    # Draw chunk box with bright yellow/gold color
+    color = (1.0, 0.85, 0.0, 1.0)  # Gold color
+    chunk_batch = batch_for_shader(
+        shader, "LINES", {"pos": chunk_vertices}, indices=chunk_edges
+    )
+    shader.uniform_float("color", color)
+    shader.uniform_float("lineWidth", 3.0)  # Thicker line for visibility
+    chunk_batch.draw(shader)
+
+    # Draw skirt as corner markers (similar to regular chunk skirt visualization)
+    sx0, sy0, sz0 = skirt_min
+    sx1, sy1, sz1 = skirt_max
+
+    # Calculate corner marker size based on chunk dimensions
+    chunk_size_x = x1 - x0
+    chunk_size_y = y1 - y0
+    chunk_size_z = z1 - z0
+    min_dim = min(chunk_size_x, chunk_size_y, chunk_size_z)
+    corner_size = min_dim * 0.15  # 15% of smallest dimension
+
+    skirt_vertices: list[tuple[float, float, float]] = []
+    skirt_edges: list[tuple[int, int]] = []
+
+    def add_skirt_edge(
+        p1: tuple[float, float, float],
+        p2: tuple[float, float, float],
+    ) -> None:
+        """Add an edge to the skirt."""
+        i = len(skirt_vertices)
+        skirt_vertices.append(p1)
+        skirt_vertices.append(p2)
+        skirt_edges.append((i, i + 1))
+
+    # 8 corners of skirt box with their inward directions
+    corner_data = [
+        ((sx0, sy0, sz0), +1, +1, +1),  # 0: min corner
+        ((sx1, sy0, sz0), -1, +1, +1),  # 1
+        ((sx1, sy1, sz0), -1, -1, +1),  # 2
+        ((sx0, sy1, sz0), +1, -1, +1),  # 3
+        ((sx0, sy0, sz1), +1, +1, -1),  # 4
+        ((sx1, sy0, sz1), -1, +1, -1),  # 5
+        ((sx1, sy1, sz1), -1, -1, -1),  # 6: max corner
+        ((sx0, sy1, sz1), +1, -1, -1),  # 7
+    ]
+
+    for corner, dx, dy, dz in corner_data:
+        cx, cy, cz = corner
+        # X-axis marker
+        add_skirt_edge(corner, (cx + dx * corner_size, cy, cz))
+        # Y-axis marker
+        add_skirt_edge(corner, (cx, cy + dy * corner_size, cz))
+        # Z-axis marker
+        add_skirt_edge(corner, (cx, cy, cz + dz * corner_size))
+
+    # Draw skirt corners with same color but thinner
+    skirt_batch = batch_for_shader(
+        shader, "LINES", {"pos": skirt_vertices}, indices=skirt_edges
+    )
+    shader.uniform_float("color", color)
+    shader.uniform_float("lineWidth", 2.0)
+    skirt_batch.draw(shader)
+
+
 def draw_chunks() -> None:
     """Draw chunk wireframes in the viewport."""
     context = bpy.context
@@ -519,7 +644,8 @@ def draw_chunks() -> None:
     props = get_scene_props(scene)
 
     # Check if anything needs to be drawn
-    if not props.show_chunks and not props.show_voxel_grid:
+    has_processing_chunk = _current_processing_chunk is not None
+    if not props.show_chunks and not props.show_voxel_grid and not has_processing_chunk:
         return
 
     chunk_bounds = calculate_chunk_bounds(scene)
@@ -530,7 +656,7 @@ def draw_chunks() -> None:
     show_selection_grid = getattr(props, "voxel_grid_bounds_selection", False)
     can_draw_selection_grid = props.show_voxel_grid and show_selection_grid
 
-    if chunk_bounds is None and not can_draw_selection_grid:
+    if chunk_bounds is None and not can_draw_selection_grid and not has_processing_chunk:
         return
 
     # Get viewport dimensions for the shader
@@ -556,10 +682,18 @@ def draw_chunks() -> None:
     if props.show_voxel_grid:
         _draw_voxel_grids(props, context, scene, chunk_bounds, chunk_size, shader)
 
-    # Restore state
+    # Restore state for regular drawing
     gpu.state.blend_set("NONE")
     gpu.state.depth_mask_set(True)
     gpu.state.depth_test_set("NONE")
+
+    # Draw processing chunk highlight AFTER restoring state,
+    # with depth test disabled so it's always visible through objects
+    if _current_processing_chunk is not None:
+        gpu.state.blend_set("ALPHA")
+        gpu.state.depth_test_set("NONE")  # Always visible
+        _draw_processing_chunk_highlight(shader)
+        gpu.state.blend_set("NONE")
 
 
 def register_draw_handler() -> None:

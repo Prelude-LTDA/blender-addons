@@ -21,14 +21,10 @@ blender_version_min = "5.0.0"
 # blender_version_max = "6.0.0"
 
 # License conforming to https://spdx.org/licenses/
-license = [
-    "SPDX:GPL-3.0-or-later",
-]
+license = ["SPDX:GPL-3.0-or-later"]
 
 # Optional: copyright notice
-copyright = [
-    "2025 Your Name",
-]
+copyright = ["2025 Your Name"]
 
 # Optional: list of supported platforms (omit for all platforms)
 # platforms = ["windows-x64", "macos-arm64", "linux-x64", "windows-arm64", "macos-x64"]

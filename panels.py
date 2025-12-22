@@ -271,6 +271,53 @@ class VOXELTERRAIN_PT_scene_export(bpy.types.Panel):
         row.operator("voxel_terrain.export", text="Export Voxel Terrain")
 
 
+class VOXELTERRAIN_PT_scene_actions(bpy.types.Panel):
+    """Actions subpanel for Voxel Terrain generation and baking."""
+
+    bl_idname = "VOXELTERRAIN_PT_scene_actions"
+    bl_label = "Actions"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_context = "scene"
+    bl_parent_id = "VOXELTERRAIN_PT_scene_panel"
+
+    def draw(self, context: Context) -> None:
+        """Draw the panel contents."""
+        layout = self.layout
+        assert layout is not None
+
+        # Action buttons - segmented row with delete
+        row = layout.row(align=True)
+
+        # Generate button - creates editable GeoNodes setup
+        row.operator(
+            "voxel_terrain.generate",
+            text="Generate",
+            icon="GEOMETRY_NODES",
+        )
+
+        # Bake button - creates static mesh copies
+        row.operator(
+            "voxel_terrain.bake",
+            text="Bake",
+            icon="RENDER_STILL",
+        )
+
+        # Delete button - removes generated terrain
+        row.operator(
+            "voxel_terrain.delete_terrain",
+            text="",
+            icon="TRASH",
+        )
+
+        # Info box
+        box = layout.box()
+        col = box.column(align=True)
+        col.scale_y = 0.8
+        col.label(text="Generate: Creates editable GeoNodes", icon="INFO")
+        col.label(text="Bake: Creates static mesh copies", icon="INFO")
+
+
 class VOXELTERRAIN_PT_object_panel(bpy.types.Panel):
     """Object properties panel for Voxel Terrain."""
 
@@ -448,6 +495,7 @@ classes: tuple[type, ...] = (
     VOXELTERRAIN_PT_npanel_about,
     VOXELTERRAIN_PT_scene_panel,
     VOXELTERRAIN_PT_scene_settings,
+    VOXELTERRAIN_PT_scene_actions,
     VOXELTERRAIN_PT_scene_export,
     VOXELTERRAIN_PT_object_panel,
 )
