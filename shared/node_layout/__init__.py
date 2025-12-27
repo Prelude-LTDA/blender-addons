@@ -43,6 +43,136 @@ def _trace_to_real_source(socket: bpy.types.NodeSocket) -> bpy.types.NodeSocket:
     return current
 
 
+def _build_outgoing_links_map(
+    node_tree: bpy.types.NodeTree,
+) -> dict[bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]]:
+    """Build adjacency map for O(1) lookups: node -> list of (to_node, link)."""
+    outgoing_links: dict[bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]] = {}
+    for link in node_tree.links:
+        if not link.is_valid:
+            continue
+        from_node = link.from_node
+        to_node = link.to_node
+        if from_node is None or to_node is None:
+            continue
+        if from_node not in outgoing_links:
+            outgoing_links[from_node] = []
+        outgoing_links[from_node].append((to_node, link))
+    return outgoing_links
+
+
+def _mark_reroutes_in_chain(
+    from_socket: bpy.types.NodeSocket,
+    reroutes_to_potentially_remove: set[bpy.types.Node],
+) -> None:
+    """Mark all reroutes in a chain starting from from_socket for potential removal."""
+    current = from_socket
+    while current.node is not None and current.node.type == "REROUTE":
+        reroutes_to_potentially_remove.add(current.node)
+        reroute_node = current.node
+        if reroute_node.inputs and reroute_node.inputs[0].links:
+            link_to_input = reroute_node.inputs[0].links[0]
+            if link_to_input.from_socket is not None:
+                current = link_to_input.from_socket
+            else:
+                break
+        else:
+            break
+
+
+def _collect_connections_to_restore(
+    node_tree: bpy.types.NodeTree,
+    nodes_to_layout: set[bpy.types.Node] | None,
+) -> tuple[list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]], set[bpy.types.Node]]:
+    """Collect connections that need to be restored after removing reroutes.
+
+    Returns:
+        Tuple of (connections_to_restore, reroutes_to_potentially_remove)
+    """
+    connections_to_restore: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = []
+    reroutes_to_potentially_remove: set[bpy.types.Node] = set()
+
+    for link in node_tree.links:
+        if not link.is_valid:
+            continue
+
+        to_socket = link.to_socket
+        to_node = link.to_node
+
+        # Skip if destination is a reroute or missing
+        if to_node is None or to_node.type == "REROUTE" or to_socket is None:
+            continue
+
+        from_socket = link.from_socket
+        if from_socket is None:
+            continue
+
+        real_source = _trace_to_real_source(from_socket)
+
+        # Only process if we found a real (non-reroute) source
+        if real_source.node is None or real_source.node.type == "REROUTE":
+            continue
+
+        # If filtering, only restore connections where BOTH endpoints are in our set
+        if (
+            nodes_to_layout is not None
+            and (real_source.node not in nodes_to_layout or to_node not in nodes_to_layout)
+        ):
+            continue
+
+        connections_to_restore.append((real_source, to_socket))
+        _mark_reroutes_in_chain(from_socket, reroutes_to_potentially_remove)
+
+    return connections_to_restore, reroutes_to_potentially_remove
+
+
+def _is_reroute_safe_to_remove(
+    reroute: bpy.types.Node,
+    outgoing_links: dict[bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]],
+    nodes_to_layout: set[bpy.types.Node],
+) -> bool:
+    """Check if a reroute can be safely removed (all destinations are in nodes_to_layout)."""
+    for to_node, _link in outgoing_links.get(reroute, []):
+        dest = to_node
+        while dest is not None and dest.type == "REROUTE":
+            next_links = outgoing_links.get(dest, [])
+            dest = next_links[0][0] if next_links else None
+        if dest is not None and dest not in nodes_to_layout:
+            return False
+    return True
+
+
+def _determine_reroutes_to_remove(
+    node_tree: bpy.types.NodeTree,
+    nodes_to_layout: set[bpy.types.Node] | None,
+    reroutes_to_potentially_remove: set[bpy.types.Node],
+    outgoing_links: dict[bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]],
+) -> list[bpy.types.Node]:
+    """Determine which reroutes should actually be removed."""
+    if nodes_to_layout is None:
+        return [n for n in node_tree.nodes if n.type == "REROUTE"]
+
+    return [
+        reroute for reroute in reroutes_to_potentially_remove
+        if _is_reroute_safe_to_remove(reroute, outgoing_links, nodes_to_layout)
+    ]
+
+
+def _restore_connections(
+    node_tree: bpy.types.NodeTree,
+    connections_to_restore: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]],
+) -> None:
+    """Restore direct connections, skipping ones that already exist."""
+    existing_connections: set[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = set()
+    for link in node_tree.links:
+        if link.is_valid and link.from_socket is not None and link.to_socket is not None:
+            existing_connections.add((link.from_socket, link.to_socket))
+
+    for from_socket, to_socket in connections_to_restore:
+        if (from_socket, to_socket) not in existing_connections:
+            node_tree.links.new(from_socket, to_socket)
+
+
 def _remove_all_reroutes(
     node_tree: bpy.types.NodeTree,
     nodes_to_layout: set[bpy.types.Node] | None = None,
@@ -56,112 +186,18 @@ def _remove_all_reroutes(
         node_tree: The node tree to modify
         nodes_to_layout: If provided, only remove reroutes where both source and dest are in this set
     """
-    # Pre-build adjacency map for O(1) lookups: node -> list of (to_node, link)
-    outgoing_links: dict[bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]] = {}
-    for link in node_tree.links:
-        if not link.is_valid:
-            continue
-        from_node = link.from_node
-        to_node = link.to_node
-        if from_node is None or to_node is None:
-            continue
-        if from_node not in outgoing_links:
-            outgoing_links[from_node] = []
-        outgoing_links[from_node].append((to_node, link))
-
-    # First, collect all connections that need to be preserved
-    # Map: (real_source_socket, destination_socket)
-    connections_to_restore: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = []
-
-    # Track which reroutes are part of connections we're restoring (both ends in our set)
-    reroutes_to_potentially_remove: set[bpy.types.Node] = set()
-
-    for link in node_tree.links:
-        if not link.is_valid:
-            continue
-
-        to_socket = link.to_socket
-        to_node = link.to_node
-
-        # Skip if destination is a reroute (we'll handle it from the final destination)
-        if to_node is None or to_node.type == "REROUTE":
-            continue
-
-        # Skip if no destination socket
-        if to_socket is None:
-            continue
-
-        # Trace back through any reroutes to find real source
-        from_socket = link.from_socket
-        if from_socket is None:
-            continue
-
-        real_source = _trace_to_real_source(from_socket)
-
-        # Only process if we found a real (non-reroute) source
-        if real_source.node is None or real_source.node.type == "REROUTE":
-            continue
-
-        # If filtering, only restore connections where BOTH endpoints are in our set
-        if nodes_to_layout is not None:  # noqa: SIM102
-            if real_source.node not in nodes_to_layout or to_node not in nodes_to_layout:
-                continue
-
-        connections_to_restore.append((real_source, to_socket))
-
-        # Mark reroutes in this chain for potential removal
-        current = from_socket
-        while current.node is not None and current.node.type == "REROUTE":
-            reroutes_to_potentially_remove.add(current.node)
-            reroute_node = current.node
-            if reroute_node.inputs and reroute_node.inputs[0].links:
-                link_to_input = reroute_node.inputs[0].links[0]
-                if link_to_input.from_socket is not None:
-                    current = link_to_input.from_socket
-                else:
-                    break
-            else:
-                break
-
-    # Determine which reroutes to actually remove
-    if nodes_to_layout is None:
-        # Remove all reroutes
-        reroutes_to_remove = [n for n in node_tree.nodes if n.type == "REROUTE"]
-    else:
-        # Only remove reroutes that are exclusively part of internal connections
-        # A reroute is safe to remove only if ALL its connections lead to nodes in our set
-        reroutes_to_remove = []
-        for reroute in reroutes_to_potentially_remove:
-            safe_to_remove = True
-            # Check all outgoing connections from this reroute (O(1) lookup)
-            for to_node, _link in outgoing_links.get(reroute, []):
-                # Trace forward to final destination
-                dest = to_node
-                while dest is not None and dest.type == "REROUTE":
-                    # Find where this reroute outputs to (O(1) lookup)
-                    next_links = outgoing_links.get(dest, [])
-                    dest = next_links[0][0] if next_links else None
-                # If final dest is outside our set, don't remove this reroute
-                if dest is not None and dest not in nodes_to_layout:
-                    safe_to_remove = False
-                    break
-            if safe_to_remove:
-                reroutes_to_remove.append(reroute)
+    outgoing_links = _build_outgoing_links_map(node_tree)
+    connections_to_restore, reroutes_to_potentially_remove = _collect_connections_to_restore(
+        node_tree, nodes_to_layout
+    )
+    reroutes_to_remove = _determine_reroutes_to_remove(
+        node_tree, nodes_to_layout, reroutes_to_potentially_remove, outgoing_links
+    )
 
     for reroute in reroutes_to_remove:
         node_tree.nodes.remove(reroute)
 
-    # Build a set of existing connections for O(1) lookup
-    existing_connections: set[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = set()
-    for link in node_tree.links:
-        if link.is_valid and link.from_socket is not None and link.to_socket is not None:
-            existing_connections.add((link.from_socket, link.to_socket))
-
-    # Restore direct connections
-    for from_socket, to_socket in connections_to_restore:
-        # Check if connection already exists (O(1) lookup)
-        if (from_socket, to_socket) not in existing_connections:
-            node_tree.links.new(from_socket, to_socket)
+    _restore_connections(node_tree, connections_to_restore)
 
 
 @dataclass
@@ -405,6 +441,59 @@ def _assign_reroutes_to_frames(
             reroute.parent = innermost_frame
 
 
+def _trace_upstream_connections(
+    reroute: bpy.types.Node,
+    visited_reroutes: set[bpy.types.Node],
+    connected: list[bpy.types.Node],
+) -> None:
+    """Trace upstream (input) connections from a reroute node."""
+    if not reroute.inputs:
+        return
+    input_links = reroute.inputs[0].links
+    if input_links is None:
+        return
+    for link in input_links:
+        if link.from_node is None:
+            continue
+        if link.from_node.type == "REROUTE":
+            _trace_reroute_connections(link.from_node, visited_reroutes, connected)
+        else:
+            connected.append(link.from_node)
+
+
+def _trace_downstream_connections(
+    reroute: bpy.types.Node,
+    visited_reroutes: set[bpy.types.Node],
+    connected: list[bpy.types.Node],
+) -> None:
+    """Trace downstream (output) connections from a reroute node."""
+    if not reroute.outputs:
+        return
+    output_links = reroute.outputs[0].links
+    if output_links is None:
+        return
+    for link in output_links:
+        if link.to_node is None:
+            continue
+        if link.to_node.type == "REROUTE":
+            _trace_reroute_connections(link.to_node, visited_reroutes, connected)
+        else:
+            connected.append(link.to_node)
+
+
+def _trace_reroute_connections(
+    current_reroute: bpy.types.Node,
+    visited_reroutes: set[bpy.types.Node],
+    connected: list[bpy.types.Node],
+) -> None:
+    """Recursively trace connections through reroute nodes."""
+    if current_reroute in visited_reroutes:
+        return
+    visited_reroutes.add(current_reroute)
+    _trace_upstream_connections(current_reroute, visited_reroutes, connected)
+    _trace_downstream_connections(current_reroute, visited_reroutes, connected)
+
+
 def _get_connected_non_reroute_nodes(
     _node_tree: bpy.types.NodeTree,
     reroute: bpy.types.Node,
@@ -412,35 +501,7 @@ def _get_connected_non_reroute_nodes(
     """Get all non-reroute nodes connected to a reroute (following reroute chains)."""
     connected: list[bpy.types.Node] = []
     visited_reroutes: set[bpy.types.Node] = set()
-
-    def trace_connections(current_reroute: bpy.types.Node) -> None:
-        if current_reroute in visited_reroutes:
-            return
-        visited_reroutes.add(current_reroute)
-
-        # Check upstream (input)
-        if current_reroute.inputs:
-            input_links = current_reroute.inputs[0].links
-            if input_links is not None:
-                for link in input_links:
-                    if link.from_node is not None:
-                        if link.from_node.type == "REROUTE":
-                            trace_connections(link.from_node)
-                        else:
-                            connected.append(link.from_node)
-
-        # Check downstream (output)
-        if current_reroute.outputs:
-            output_links = current_reroute.outputs[0].links
-            if output_links is not None:
-                for link in output_links:
-                    if link.to_node is not None:
-                        if link.to_node.type == "REROUTE":
-                            trace_connections(link.to_node)
-                        else:
-                            connected.append(link.to_node)
-
-    trace_connections(reroute)
+    _trace_reroute_connections(reroute, visited_reroutes, connected)
     return connected
 
 
@@ -1386,6 +1447,38 @@ def _realize_connection(
     node_tree.links.new(prev_socket, conn.to_socket)
 
 
+def _collapse_vertical_runs(path: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Collapse vertical runs - keep only the last reroute of each vertical segment."""
+    optimized: list[tuple[int, int]] = []
+    i = 0
+    while i < len(path):
+        j = i
+        while j + 1 < len(path) and path[j + 1][0] == path[i][0]:
+            j += 1
+        optimized.append(path[j])
+        i = j + 1
+    return optimized
+
+
+def _collapse_horizontal_runs(path: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Collapse horizontal runs of 3+ reroutes - keep first and last."""
+    horiz_optimized: list[tuple[int, int]] = []
+    i = 0
+    while i < len(path):
+        j = i
+        while j + 1 < len(path) and path[j + 1][1] == path[i][1]:
+            j += 1
+        run_length = j - i + 1
+        if run_length >= 3:
+            horiz_optimized.append(path[i])
+            horiz_optimized.append(path[j])
+        else:
+            for k in range(i, j + 1):
+                horiz_optimized.append(path[k])
+        i = j + 1
+    return horiz_optimized
+
+
 def _optimize_routing_path(
     path: list[tuple[int, int]],
     from_cell: tuple[int, int],
@@ -1407,47 +1500,14 @@ def _optimize_routing_path(
     if not path:
         return path
 
-    optimized: list[tuple[int, int]] = []
-    if collapse_vertical:
-        # Rule 1: Collapse vertical runs - keep only the last reroute of each vertical segment
-        i = 0
-        while i < len(path):
-            j = i
-            while j + 1 < len(path) and path[j + 1][0] == path[i][0]:
-                j += 1
-            optimized.append(path[j])
-            i = j + 1
-    else:
-        optimized = path[:]
+    optimized = _collapse_vertical_runs(path) if collapse_vertical else path[:]
 
     if collapse_horizontal:
-        # Rule 2: Collapse horizontal runs of 3+ reroutes - keep first and last
-        horiz_optimized: list[tuple[int, int]] = []
-        i = 0
-        while i < len(optimized):
-            # Find the end of the current horizontal run (same Y)
-            j = i
-            while j + 1 < len(optimized) and optimized[j + 1][1] == optimized[i][1]:
-                j += 1
-            run_length = j - i + 1
-            if run_length >= 3:
-                # Keep only first and last of this horizontal run
-                horiz_optimized.append(optimized[i])
-                horiz_optimized.append(optimized[j])
-            else:
-                # Keep all (1 or 2 reroutes)
-                for k in range(i, j + 1):
-                    horiz_optimized.append(optimized[k])
-            i = j + 1
-        optimized = horiz_optimized
+        optimized = _collapse_horizontal_runs(optimized)
 
-    if collapse_adjacent:  # noqa: SIM102
-        # Rule 3: If after optimization, only one reroute remains at dest cell,
-        # and source is at X-1 (adjacent column), we can remove it entirely
-        if (
-            len(optimized) == 1 and
-            from_cell[0] + 1 == to_cell[0]
-        ):
-            return []
+    # Rule 3: If after optimization, only one reroute remains at dest cell,
+    # and source is at X-1 (adjacent column), we can remove it entirely
+    if collapse_adjacent and len(optimized) == 1 and from_cell[0] + 1 == to_cell[0]:
+        return []
 
     return optimized
