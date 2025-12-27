@@ -1,0 +1,43 @@
+schema_version = "1.0.0"
+
+# Unique identifier for the extension
+id = "node_layout"
+version = "1.0.0"
+name = "Node Layout"
+tagline = "Automatically arrange nodes in a clean PCB-style layout"
+maintainer = "Your Name <your.email@example.com>"
+
+# Extension type
+type = "add-on"
+
+# Optional: tag list
+tags = ["Node"]
+
+# Blender version compatibility - targeting 5.0 and up
+blender_version_min = "5.0.0"
+
+# License conforming to https://spdx.org/licenses/
+license = ["SPDX:GPL-3.0-or-later"]
+
+# Optional: copyright notice
+copyright = ["2025 Your Name"]
+
+# Build settings
+[build]
+paths_exclude_pattern = [
+    "__pycache__/",
+    ".*",
+    "*.zip",
+    ".git/",
+    ".vscode/",
+    "*.pyc",
+    "*.pyo",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    "pyrightconfig.json",
+    "pyproject.toml",
+    ".python-version",
+    "requirements*.txt",
+    "dev/",
+    "tests/",
+]

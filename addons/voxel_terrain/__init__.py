@@ -15,6 +15,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+# Shared module names (need to be reloaded first, in dependency order)
+_shared_module_names: tuple[str, ...] = (
+    "shared",
+    "shared.node_layout",
+)
+
 # Module names for registration (order matters for dependencies)
 _module_names: tuple[str, ...] = (
     "properties",
@@ -35,6 +41,13 @@ def _import_modules() -> None:
     """Import or reload all addon modules."""
     import sys
 
+    # First, reload shared modules (they need to be reloaded before dependents)
+    for name in _shared_module_names:
+        full_name = f"{__package__}.{name}"
+        if full_name in sys.modules:
+            importlib.reload(sys.modules[full_name])
+
+    # Then reload addon modules
     for name in _module_names:
         full_name = f"{__package__}.{name}"
 

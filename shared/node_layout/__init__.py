@@ -16,6 +16,86 @@ from dataclasses import dataclass, field
 import bpy
 
 
+def _trace_to_real_source(socket: bpy.types.NodeSocket) -> bpy.types.NodeSocket:
+    """Trace back through reroute nodes to find the real source socket."""
+    current = socket
+    visited: set[bpy.types.NodeSocket] = set()
+
+    while current.node is not None and current.node.type == "REROUTE":
+        if current in visited:
+            # Cycle detected, return current to avoid infinite loop
+            break
+        visited.add(current)
+
+        # Reroute nodes have one input and one output
+        # If we're on the output, find what's connected to the input
+        reroute_node = current.node
+        if not reroute_node.inputs or not reroute_node.inputs[0].links:
+            # Dead end - reroute has no input connection
+            break
+
+        # Follow the link to the source
+        link = reroute_node.inputs[0].links[0]
+        if link.from_socket is None:
+            break
+        current = link.from_socket
+
+    return current
+
+
+def _remove_all_reroutes(node_tree: bpy.types.NodeTree) -> None:
+    """Remove all reroute nodes and reconnect through them.
+
+    For each connection that goes through reroutes, traces back to find
+    the real source and creates a direct connection.
+    """
+    # First, collect all connections that need to be preserved
+    # Map: (real_source_socket, destination_socket)
+    connections_to_restore: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = []
+
+    for link in node_tree.links:
+        if not link.is_valid:
+            continue
+
+        to_socket = link.to_socket
+        to_node = link.to_node
+
+        # Skip if destination is a reroute (we'll handle it from the final destination)
+        if to_node is None or to_node.type == "REROUTE":
+            continue
+
+        # Skip if no destination socket
+        if to_socket is None:
+            continue
+
+        # Trace back through any reroutes to find real source
+        from_socket = link.from_socket
+        if from_socket is None:
+            continue
+
+        real_source = _trace_to_real_source(from_socket)
+
+        # Only add if we found a real (non-reroute) source
+        if real_source.node is not None and real_source.node.type != "REROUTE":
+            connections_to_restore.append((real_source, to_socket))
+
+    # Remove all reroute nodes
+    reroutes_to_remove = [n for n in node_tree.nodes if n.type == "REROUTE"]
+    for reroute in reroutes_to_remove:
+        node_tree.nodes.remove(reroute)
+
+    # Restore direct connections
+    for from_socket, to_socket in connections_to_restore:
+        # Check if connection already exists (from non-reroute path)
+        exists = any(
+            link.from_socket == from_socket and link.to_socket == to_socket
+            for link in node_tree.links
+            if link.is_valid
+        )
+        if not exists:
+            node_tree.links.new(from_socket, to_socket)
+
+
 @dataclass
 class VirtualReroute:
     """A reroute node in the virtual grid, before realization."""
@@ -425,6 +505,10 @@ def layout_nodes_pcb_style(
     """
     if not node_tree.nodes:
         return
+
+    # Step 0: Remove existing reroutes and restore direct connections
+    # This ensures repeated layouts produce consistent results
+    _remove_all_reroutes(node_tree)
 
     # Step 1: Compute column positions using both input and output distances
     columns = compute_node_columns(node_tree)
