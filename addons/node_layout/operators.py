@@ -83,8 +83,15 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             self.report({"WARNING"}, "Node tree is empty")
             return {"CANCELLED"}
 
-        # Count nodes before layout for reporting
-        node_count = len([n for n in node_tree.nodes if n.type != "REROUTE"])
+        # Check if we should only layout selected nodes
+        selected_nodes = [n for n in node_tree.nodes if n.select and n.type not in ("FRAME", "REROUTE")]
+        selected_only = len(selected_nodes) > 1
+
+        # Count nodes for reporting
+        if selected_only:
+            node_count = len(selected_nodes)
+        else:
+            node_count = len([n for n in node_tree.nodes if n.type not in ("REROUTE", "FRAME")])
 
         # Apply the layout
         layout_nodes_pcb_style(
@@ -93,9 +100,13 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             cell_height=self.cell_height,
             lane_width=self.lane_width,
             lane_gap=self.lane_gap,
+            selected_only=selected_only,
         )
 
-        self.report({"INFO"}, f"Arranged {node_count} nodes")
+        if selected_only:
+            self.report({"INFO"}, f"Arranged {node_count} selected nodes")
+        else:
+            self.report({"INFO"}, f"Arranged {node_count} nodes")
         return {"FINISHED"}
 
     def invoke(self, context: Context, event: Event) -> set[str]:  # noqa: ARG002

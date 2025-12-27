@@ -43,15 +43,25 @@ def _trace_to_real_source(socket: bpy.types.NodeSocket) -> bpy.types.NodeSocket:
     return current
 
 
-def _remove_all_reroutes(node_tree: bpy.types.NodeTree) -> None:
-    """Remove all reroute nodes and reconnect through them.
+def _remove_all_reroutes(
+    node_tree: bpy.types.NodeTree,
+    nodes_to_layout: set[bpy.types.Node] | None = None,
+) -> None:
+    """Remove reroute nodes and reconnect through them.
 
     For each connection that goes through reroutes, traces back to find
     the real source and creates a direct connection.
+
+    Args:
+        node_tree: The node tree to modify
+        nodes_to_layout: If provided, only remove reroutes where both source and dest are in this set
     """
     # First, collect all connections that need to be preserved
     # Map: (real_source_socket, destination_socket)
     connections_to_restore: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = []
+
+    # Track which reroutes are part of connections we're restoring (both ends in our set)
+    reroutes_to_potentially_remove: set[bpy.types.Node] = set()
 
     for link in node_tree.links:
         if not link.is_valid:
@@ -75,12 +85,62 @@ def _remove_all_reroutes(node_tree: bpy.types.NodeTree) -> None:
 
         real_source = _trace_to_real_source(from_socket)
 
-        # Only add if we found a real (non-reroute) source
-        if real_source.node is not None and real_source.node.type != "REROUTE":
-            connections_to_restore.append((real_source, to_socket))
+        # Only process if we found a real (non-reroute) source
+        if real_source.node is None or real_source.node.type == "REROUTE":
+            continue
 
-    # Remove all reroute nodes
-    reroutes_to_remove = [n for n in node_tree.nodes if n.type == "REROUTE"]
+        # If filtering, only restore connections where BOTH endpoints are in our set
+        if nodes_to_layout is not None:
+            if real_source.node not in nodes_to_layout or to_node not in nodes_to_layout:
+                continue
+
+        connections_to_restore.append((real_source, to_socket))
+
+        # Mark reroutes in this chain for potential removal
+        current = from_socket
+        while current.node is not None and current.node.type == "REROUTE":
+            reroutes_to_potentially_remove.add(current.node)
+            reroute_node = current.node
+            if reroute_node.inputs and reroute_node.inputs[0].links:
+                link_to_input = reroute_node.inputs[0].links[0]
+                if link_to_input.from_socket is not None:
+                    current = link_to_input.from_socket
+                else:
+                    break
+            else:
+                break
+
+    # Determine which reroutes to actually remove
+    if nodes_to_layout is None:
+        # Remove all reroutes
+        reroutes_to_remove = [n for n in node_tree.nodes if n.type == "REROUTE"]
+    else:
+        # Only remove reroutes that are exclusively part of internal connections
+        # A reroute is safe to remove only if ALL its connections lead to nodes in our set
+        reroutes_to_remove = []
+        for reroute in reroutes_to_potentially_remove:
+            safe_to_remove = True
+            # Check all outgoing connections from this reroute
+            for link in node_tree.links:
+                if link.from_node != reroute:
+                    continue
+                # Trace forward to final destination
+                dest = link.to_node
+                while dest is not None and dest.type == "REROUTE":
+                    # Find where this reroute outputs to
+                    next_dest = None
+                    for next_link in node_tree.links:
+                        if next_link.from_node == dest:
+                            next_dest = next_link.to_node
+                            break
+                    dest = next_dest
+                # If final dest is outside our set, don't remove this reroute
+                if dest is not None and dest not in nodes_to_layout:
+                    safe_to_remove = False
+                    break
+            if safe_to_remove:
+                reroutes_to_remove.append(reroute)
+
     for reroute in reroutes_to_remove:
         node_tree.nodes.remove(reroute)
 
@@ -94,6 +154,173 @@ def _remove_all_reroutes(node_tree: bpy.types.NodeTree) -> None:
         )
         if not exists:
             node_tree.links.new(from_socket, to_socket)
+
+
+@dataclass
+class SavedFrame:
+    """Information needed to recreate a frame after layout."""
+
+    name: str
+    label: str
+    color: tuple[float, float, float]
+    use_custom_color: bool
+    label_size: int
+    # Children stored by name since node references become invalid after removal
+    child_node_names: list[str]
+    # Parent frame name (for nested frames), or None if top-level
+    parent_frame_name: str | None
+
+
+def _save_all_frames(
+    node_tree: bpy.types.NodeTree,
+    nodes_to_layout: set[bpy.types.Node] | None = None,
+) -> list[SavedFrame]:
+    """Save information about frames containing nodes to be laid out.
+
+    Args:
+        node_tree: The node tree
+        nodes_to_layout: If provided, only save frames that contain these nodes
+
+    Returns frames sorted so parent frames come before child frames,
+    which is needed for proper restoration.
+    """
+    saved_frames: list[SavedFrame] = []
+
+    # Collect frames to save
+    if nodes_to_layout is None:
+        frames = [n for n in node_tree.nodes if n.type == "FRAME"]
+    else:
+        # Find frames that contain any of our nodes
+        frames_to_save: set[bpy.types.Node] = set()
+        for node in nodes_to_layout:
+            parent = node.parent
+            while parent is not None:
+                frames_to_save.add(parent)
+                parent = parent.parent
+        frames = list(frames_to_save)
+
+    for frame in frames:
+        # Find direct children of this frame that are in our layout set
+        if nodes_to_layout is None:
+            child_names = [
+                n.name for n in node_tree.nodes
+                if n.parent == frame and n.type != "FRAME"
+            ]
+        else:
+            child_names = [
+                n.name for n in node_tree.nodes
+                if n.parent == frame and n.type != "FRAME" and n in nodes_to_layout
+            ]
+
+        # Get parent frame name if nested
+        parent_name = frame.parent.name if frame.parent is not None else None
+
+        saved_frames.append(SavedFrame(
+            name=frame.name,
+            label=frame.label,
+            color=(frame.color.r, frame.color.g, frame.color.b),
+            use_custom_color=frame.use_custom_color,
+            label_size=frame.label_size,  # type: ignore[attr-defined]
+            child_node_names=child_names,
+            parent_frame_name=parent_name,
+        ))
+
+    # Sort so parent frames come before their children
+    # (frames with no parent first, then frames whose parents are already in the list)
+    sorted_frames: list[SavedFrame] = []
+    remaining = saved_frames.copy()
+
+    while remaining:
+        # Find frames whose parent is already processed (or has no parent)
+        processed_names = {f.name for f in sorted_frames}
+        ready = [
+            f for f in remaining
+            if f.parent_frame_name is None or f.parent_frame_name in processed_names
+        ]
+
+        if not ready:
+            # Cycle or orphan - just add remaining
+            sorted_frames.extend(remaining)
+            break
+
+        for f in ready:
+            sorted_frames.append(f)
+            remaining.remove(f)
+
+    return sorted_frames
+
+
+def _remove_all_frames(
+    node_tree: bpy.types.NodeTree,
+    nodes_to_layout: set[bpy.types.Node] | None = None,
+) -> None:
+    """Remove frame nodes and detach their children.
+
+    Args:
+        node_tree: The node tree to modify
+        nodes_to_layout: If provided, only detach these nodes from frames
+                        and only remove frames that become empty
+    """
+    if nodes_to_layout is None:
+        # Detach all nodes from frames
+        for node in node_tree.nodes:
+            if node.parent is not None:
+                node.parent = None
+
+        # Remove all frame nodes
+        frames = [n for n in node_tree.nodes if n.type == "FRAME"]
+        for frame in frames:
+            node_tree.nodes.remove(frame)
+    else:
+        # Only detach nodes we're laying out
+        for node in nodes_to_layout:
+            if node.parent is not None:
+                node.parent = None
+
+        # Don't remove frames - they may still have other children
+
+
+def _restore_all_frames(
+    node_tree: bpy.types.NodeTree,
+    saved_frames: list[SavedFrame],
+) -> None:
+    """Recreate all frames and re-parent nodes to them.
+
+    saved_frames must be sorted so parent frames come before children.
+    If a frame with the same name already exists, reuse it instead of creating a new one.
+    """
+    # Create or reuse frames in order (parents before children)
+    frame_nodes: dict[str, bpy.types.Node] = {}
+
+    for saved in saved_frames:
+        # Check if frame already exists (e.g., in selected-only mode where
+        # frames with non-selected children are preserved)
+        existing_frame = node_tree.nodes.get(saved.name)
+        if existing_frame is not None and existing_frame.type == "FRAME":
+            frame = existing_frame
+        else:
+            frame = node_tree.nodes.new("NodeFrame")
+            frame.name = saved.name
+            frame.label = saved.label
+            frame.color = saved.color
+            frame.use_custom_color = saved.use_custom_color
+            frame.label_size = saved.label_size  # type: ignore[attr-defined]
+        frame_nodes[saved.name] = frame
+
+    # Set parent relationships between frames
+    for saved in saved_frames:
+        if saved.parent_frame_name is not None:
+            parent_frame = frame_nodes.get(saved.parent_frame_name)
+            if parent_frame is not None:
+                frame_nodes[saved.name].parent = parent_frame
+
+    # Re-parent child nodes to their frames
+    for saved in saved_frames:
+        frame = frame_nodes[saved.name]
+        for child_name in saved.child_node_names:
+            child_node = node_tree.nodes.get(child_name)
+            if child_node is not None:
+                child_node.parent = frame
 
 
 @dataclass
@@ -450,12 +677,17 @@ def _refine_columns_shaker(
 
 def compute_node_columns(
     node_tree: bpy.types.NodeTree,
+    nodes_to_layout: set[bpy.types.Node] | None = None,
 ) -> dict[bpy.types.Node, int]:
     """Compute column position for each node using both input and output distances.
 
     Uses output_depth - input_depth to order nodes along the flow,
     then refines with shaker-sort style passes to separate same-column connections,
     then assigns sequential column numbers to collapse any gaps.
+
+    Args:
+        node_tree: The node tree
+        nodes_to_layout: If provided, only compute columns for these nodes
     """
     output_depths = compute_node_depths(node_tree)
     input_depths = compute_node_input_depths(node_tree)
@@ -464,6 +696,8 @@ def compute_node_columns(
     raw_positions: dict[bpy.types.Node, float] = {}
     for node in node_tree.nodes:
         if node.type == "FRAME":
+            continue
+        if nodes_to_layout is not None and node not in nodes_to_layout:
             continue
         out_d = output_depths.get(node, 0)
         in_d = input_depths.get(node, 0)
@@ -493,6 +727,7 @@ def layout_nodes_pcb_style(
     cell_height: float = 200.0,
     lane_width: float = 20.0,
     lane_gap: float = 50.0,
+    selected_only: bool = False,
 ) -> None:
     """Layout nodes in a PCB/FPGA-style grid with routed connections.
 
@@ -502,18 +737,37 @@ def layout_nodes_pcb_style(
         cell_height: Height of each grid cell (for nodes)
         lane_width: Width allocated per reroute lane in the diagonal
         lane_gap: Gap before and after the lane area
+        selected_only: If True and >1 nodes selected, only layout selected nodes
     """
     if not node_tree.nodes:
         return
 
-    # Step 0: Remove existing reroutes and restore direct connections
+    # Determine which nodes to layout
+    selected_nodes = [n for n in node_tree.nodes if n.select and n.type not in ("FRAME", "REROUTE")]
+    if selected_only and len(selected_nodes) > 1:
+        nodes_to_layout = set(selected_nodes)
+    else:
+        nodes_to_layout = None  # Layout all
+
+    # Step 0a: Remove existing reroutes and restore direct connections
     # This ensures repeated layouts produce consistent results
-    _remove_all_reroutes(node_tree)
+    _remove_all_reroutes(node_tree, nodes_to_layout)
+
+    # Step 0b: Save frame info and remove frames
+    # Frames interfere with layout since node positions are relative to parent frame
+    saved_frames = _save_all_frames(node_tree, nodes_to_layout)
+    _remove_all_frames(node_tree, nodes_to_layout)
 
     # Step 1: Compute column positions using both input and output distances
-    columns = compute_node_columns(node_tree)
+    columns = compute_node_columns(node_tree, nodes_to_layout)
     if not columns:
+        # Restore frames even if no columns to compute
+        _restore_all_frames(node_tree, saved_frames)
         return
+
+    # Compute centroid of nodes before layout
+    old_centroid_x = sum(n.location.x for n in columns) / len(columns)
+    old_centroid_y = sum(n.location.y for n in columns) / len(columns)
 
     # Step 2: Build virtual grid with initial node placement
     grid = _build_virtual_grid(columns)
@@ -528,7 +782,33 @@ def layout_nodes_pcb_style(
     _mark_used_reroutes(grid)
 
     # Step 6: Realize the layout in Blender
-    _realize_layout(node_tree, grid, cell_width, cell_height, lane_width, lane_gap)
+    _realize_layout(node_tree, grid, cell_width, cell_height, lane_width, lane_gap, nodes_to_layout)
+
+    # Step 7: Compute new centroid and shift to match old position
+    laid_out_nodes = list(columns.keys())
+
+    # Collect reroutes created during this layout (from the grid cells)
+    created_reroutes: list[bpy.types.Node] = []
+    for cell in grid.cells.values():
+        for virtual_reroute in cell.reroutes.values():
+            if virtual_reroute.blender_node is not None:
+                created_reroutes.append(virtual_reroute.blender_node)
+
+    all_laid_out = laid_out_nodes + created_reroutes
+
+    if laid_out_nodes:
+        new_centroid_x = sum(n.location.x for n in laid_out_nodes) / len(laid_out_nodes)
+        new_centroid_y = sum(n.location.y for n in laid_out_nodes) / len(laid_out_nodes)
+
+        offset_x = old_centroid_x - new_centroid_x
+        offset_y = old_centroid_y - new_centroid_y
+
+        for node in all_laid_out:
+            node.location.x += offset_x
+            node.location.y += offset_y
+
+    # Step 8: Restore frames and re-parent nodes
+    _restore_all_frames(node_tree, saved_frames)
 
 
 def _build_virtual_grid(columns: dict[bpy.types.Node, int]) -> VirtualGrid:
@@ -700,6 +980,7 @@ def _realize_layout(
     cell_height: float,
     lane_width: float,
     lane_gap: float,
+    nodes_to_layout: set[bpy.types.Node] | None = None,
 ) -> None:
     """Realize the virtual grid layout in Blender."""
     # Calculate per-column and per-row lane areas
@@ -710,9 +991,23 @@ def _realize_layout(
         grid, col_lane_area, row_lane_area, cell_width, cell_height, lane_width, lane_gap
     )
 
-    # Remove all existing links (we'll recreate them through reroutes)
-    for link in list(node_tree.links):
-        node_tree.links.remove(link)
+    # Remove links only between nodes we're laying out
+    if nodes_to_layout is None:
+        # Remove all links
+        for link in list(node_tree.links):
+            node_tree.links.remove(link)
+    else:
+        # Only remove links where BOTH endpoints are in our layout set
+        for link in list(node_tree.links):
+            if not link.is_valid:
+                continue
+            from_node = link.from_node
+            to_node = link.to_node
+            if from_node is None or to_node is None:
+                continue
+            # Only remove if both nodes are in our set
+            if from_node in nodes_to_layout and to_node in nodes_to_layout:
+                node_tree.links.remove(link)
 
     # Place actual nodes in their cells
     for cell in grid.cells.values():
