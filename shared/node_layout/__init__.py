@@ -43,136 +43,6 @@ def _trace_to_real_source(socket: bpy.types.NodeSocket) -> bpy.types.NodeSocket:
     return current
 
 
-def _build_outgoing_links_map(
-    node_tree: bpy.types.NodeTree,
-) -> dict[bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]]:
-    """Build adjacency map for O(1) lookups: node -> list of (to_node, link)."""
-    outgoing_links: dict[bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]] = {}
-    for link in node_tree.links:
-        if not link.is_valid:
-            continue
-        from_node = link.from_node
-        to_node = link.to_node
-        if from_node is None or to_node is None:
-            continue
-        if from_node not in outgoing_links:
-            outgoing_links[from_node] = []
-        outgoing_links[from_node].append((to_node, link))
-    return outgoing_links
-
-
-def _mark_reroutes_in_chain(
-    from_socket: bpy.types.NodeSocket,
-    reroutes_to_potentially_remove: set[bpy.types.Node],
-) -> None:
-    """Mark all reroutes in a chain starting from from_socket for potential removal."""
-    current = from_socket
-    while current.node is not None and current.node.type == "REROUTE":
-        reroutes_to_potentially_remove.add(current.node)
-        reroute_node = current.node
-        if reroute_node.inputs and reroute_node.inputs[0].links:
-            link_to_input = reroute_node.inputs[0].links[0]
-            if link_to_input.from_socket is not None:
-                current = link_to_input.from_socket
-            else:
-                break
-        else:
-            break
-
-
-def _collect_connections_to_restore(
-    node_tree: bpy.types.NodeTree,
-    nodes_to_layout: set[bpy.types.Node] | None,
-) -> tuple[list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]], set[bpy.types.Node]]:
-    """Collect connections that need to be restored after removing reroutes.
-
-    Returns:
-        Tuple of (connections_to_restore, reroutes_to_potentially_remove)
-    """
-    connections_to_restore: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = []
-    reroutes_to_potentially_remove: set[bpy.types.Node] = set()
-
-    for link in node_tree.links:
-        if not link.is_valid:
-            continue
-
-        to_socket = link.to_socket
-        to_node = link.to_node
-
-        # Skip if destination is a reroute or missing
-        if to_node is None or to_node.type == "REROUTE" or to_socket is None:
-            continue
-
-        from_socket = link.from_socket
-        if from_socket is None:
-            continue
-
-        real_source = _trace_to_real_source(from_socket)
-
-        # Only process if we found a real (non-reroute) source
-        if real_source.node is None or real_source.node.type == "REROUTE":
-            continue
-
-        # If filtering, only restore connections where BOTH endpoints are in our set
-        if (
-            nodes_to_layout is not None
-            and (real_source.node not in nodes_to_layout or to_node not in nodes_to_layout)
-        ):
-            continue
-
-        connections_to_restore.append((real_source, to_socket))
-        _mark_reroutes_in_chain(from_socket, reroutes_to_potentially_remove)
-
-    return connections_to_restore, reroutes_to_potentially_remove
-
-
-def _is_reroute_safe_to_remove(
-    reroute: bpy.types.Node,
-    outgoing_links: dict[bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]],
-    nodes_to_layout: set[bpy.types.Node],
-) -> bool:
-    """Check if a reroute can be safely removed (all destinations are in nodes_to_layout)."""
-    for to_node, _link in outgoing_links.get(reroute, []):
-        dest = to_node
-        while dest is not None and dest.type == "REROUTE":
-            next_links = outgoing_links.get(dest, [])
-            dest = next_links[0][0] if next_links else None
-        if dest is not None and dest not in nodes_to_layout:
-            return False
-    return True
-
-
-def _determine_reroutes_to_remove(
-    node_tree: bpy.types.NodeTree,
-    nodes_to_layout: set[bpy.types.Node] | None,
-    reroutes_to_potentially_remove: set[bpy.types.Node],
-    outgoing_links: dict[bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]],
-) -> list[bpy.types.Node]:
-    """Determine which reroutes should actually be removed."""
-    if nodes_to_layout is None:
-        return [n for n in node_tree.nodes if n.type == "REROUTE"]
-
-    return [
-        reroute for reroute in reroutes_to_potentially_remove
-        if _is_reroute_safe_to_remove(reroute, outgoing_links, nodes_to_layout)
-    ]
-
-
-def _restore_connections(
-    node_tree: bpy.types.NodeTree,
-    connections_to_restore: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]],
-) -> None:
-    """Restore direct connections, skipping ones that already exist."""
-    existing_connections: set[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = set()
-    for link in node_tree.links:
-        if link.is_valid and link.from_socket is not None and link.to_socket is not None:
-            existing_connections.add((link.from_socket, link.to_socket))
-
-    for from_socket, to_socket in connections_to_restore:
-        if (from_socket, to_socket) not in existing_connections:
-            node_tree.links.new(from_socket, to_socket)
-
-
 def _remove_all_reroutes(
     node_tree: bpy.types.NodeTree,
     nodes_to_layout: set[bpy.types.Node] | None = None,
@@ -186,18 +56,124 @@ def _remove_all_reroutes(
         node_tree: The node tree to modify
         nodes_to_layout: If provided, only remove reroutes where both source and dest are in this set
     """
-    outgoing_links = _build_outgoing_links_map(node_tree)
-    connections_to_restore, reroutes_to_potentially_remove = _collect_connections_to_restore(
-        node_tree, nodes_to_layout
-    )
-    reroutes_to_remove = _determine_reroutes_to_remove(
-        node_tree, nodes_to_layout, reroutes_to_potentially_remove, outgoing_links
-    )
+    # Pre-build adjacency map for O(1) lookups: node -> list of (to_node, link)
+    outgoing_links: dict[
+        bpy.types.Node, list[tuple[bpy.types.Node, bpy.types.NodeLink]]
+    ] = {}
+    for link in node_tree.links:
+        if not link.is_valid:
+            continue
+        from_node = link.from_node
+        to_node = link.to_node
+        if from_node is None or to_node is None:
+            continue
+        if from_node not in outgoing_links:
+            outgoing_links[from_node] = []
+        outgoing_links[from_node].append((to_node, link))
+
+    # First, collect all connections that need to be preserved
+    # Map: (real_source_socket, destination_socket)
+    connections_to_restore: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = []
+
+    # Track which reroutes are part of connections we're restoring (both ends in our set)
+    reroutes_to_potentially_remove: set[bpy.types.Node] = set()
+
+    for link in node_tree.links:
+        if not link.is_valid:
+            continue
+
+        to_socket = link.to_socket
+        to_node = link.to_node
+
+        # Skip if destination is a reroute (we'll handle it from the final destination)
+        if to_node is None or to_node.type == "REROUTE":
+            continue
+
+        # Skip if no destination socket
+        if to_socket is None:
+            continue
+
+        # Trace back through any reroutes to find real source
+        from_socket = link.from_socket
+        if from_socket is None:
+            continue
+
+        real_source = _trace_to_real_source(from_socket)
+
+        # Only process if we found a real (non-reroute) source
+        if real_source.node is None or real_source.node.type == "REROUTE":
+            continue
+
+        # If filtering, only restore connections where BOTH endpoints are in our set
+        if nodes_to_layout is not None:
+            if (
+                real_source.node not in nodes_to_layout
+                or to_node not in nodes_to_layout
+            ):
+                continue
+
+        connections_to_restore.append((real_source, to_socket))
+
+        # Mark reroutes in this chain for potential removal
+        current = from_socket
+        while current.node is not None and current.node.type == "REROUTE":
+            reroutes_to_potentially_remove.add(current.node)
+            reroute_node = current.node
+            if reroute_node.inputs and reroute_node.inputs[0].links:
+                link_to_input = reroute_node.inputs[0].links[0]
+                if link_to_input.from_socket is not None:
+                    current = link_to_input.from_socket
+                else:
+                    break
+            else:
+                break
+
+    # Determine which reroutes to actually remove
+    if nodes_to_layout is None:
+        # Remove all reroutes
+        reroutes_to_remove = [n for n in node_tree.nodes if n.type == "REROUTE"]
+    else:
+        # Only remove reroutes that are exclusively part of internal connections
+        # A reroute is safe to remove only if ALL its connections lead to nodes in our set
+        reroutes_to_remove = []
+        for reroute in reroutes_to_potentially_remove:
+            safe_to_remove = True
+            # Check all outgoing connections from this reroute (O(1) lookup)
+            for to_node, _link in outgoing_links.get(reroute, []):
+                # Trace forward to final destination
+                dest = to_node
+                while dest is not None and dest.type == "REROUTE":
+                    # Find where this reroute outputs to (O(1) lookup)
+                    next_links = outgoing_links.get(dest, [])
+                    if next_links:
+                        dest = next_links[0][0]
+                    else:
+                        dest = None
+                # If final dest is outside our set, don't remove this reroute
+                if dest is not None and dest not in nodes_to_layout:
+                    safe_to_remove = False
+                    break
+            if safe_to_remove:
+                reroutes_to_remove.append(reroute)
 
     for reroute in reroutes_to_remove:
         node_tree.nodes.remove(reroute)
 
-    _restore_connections(node_tree, connections_to_restore)
+    # Build a set of existing connections for O(1) lookup
+    existing_connections: set[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = set()
+    for link in node_tree.links:
+        if (
+            link.is_valid
+            and link.from_socket is not None
+            and link.to_socket is not None
+        ):
+            existing_connections.add((link.from_socket, link.to_socket))
+
+    # Restore direct connections
+    for from_socket, to_socket in connections_to_restore:
+        # Check if connection already exists (O(1) lookup)
+        if (from_socket, to_socket) not in existing_connections:
+            node_tree.links.new(from_socket, to_socket)
 
 
 @dataclass
@@ -247,27 +223,31 @@ def _save_all_frames(
         # Find direct children of this frame that are in our layout set
         if nodes_to_layout is None:
             child_names = [
-                n.name for n in node_tree.nodes
+                n.name
+                for n in node_tree.nodes
                 if n.parent == frame and n.type != "FRAME"
             ]
         else:
             child_names = [
-                n.name for n in node_tree.nodes
+                n.name
+                for n in node_tree.nodes
                 if n.parent == frame and n.type != "FRAME" and n in nodes_to_layout
             ]
 
         # Get parent frame name if nested
         parent_name = frame.parent.name if frame.parent is not None else None
 
-        saved_frames.append(SavedFrame(
-            name=frame.name,
-            label=frame.label,
-            color=(frame.color.r, frame.color.g, frame.color.b),
-            use_custom_color=frame.use_custom_color,
-            label_size=frame.label_size,  # type: ignore[attr-defined]
-            child_node_names=child_names,
-            parent_frame_name=parent_name,
-        ))
+        saved_frames.append(
+            SavedFrame(
+                name=frame.name,
+                label=frame.label,
+                color=(frame.color.r, frame.color.g, frame.color.b),
+                use_custom_color=frame.use_custom_color,
+                label_size=frame.label_size,  # type: ignore[attr-defined]
+                child_node_names=child_names,
+                parent_frame_name=parent_name,
+            )
+        )
 
     # Sort so parent frames come before their children
     # (frames with no parent first, then frames whose parents are already in the list)
@@ -278,7 +258,8 @@ def _save_all_frames(
         # Find frames whose parent is already processed (or has no parent)
         processed_names = {f.name for f in sorted_frames}
         ready = [
-            f for f in remaining
+            f
+            for f in remaining
             if f.parent_frame_name is None or f.parent_frame_name in processed_names
         ]
 
@@ -441,67 +422,42 @@ def _assign_reroutes_to_frames(
             reroute.parent = innermost_frame
 
 
-def _trace_upstream_connections(
-    reroute: bpy.types.Node,
-    visited_reroutes: set[bpy.types.Node],
-    connected: list[bpy.types.Node],
-) -> None:
-    """Trace upstream (input) connections from a reroute node."""
-    if not reroute.inputs:
-        return
-    input_links = reroute.inputs[0].links
-    if input_links is None:
-        return
-    for link in input_links:
-        if link.from_node is None:
-            continue
-        if link.from_node.type == "REROUTE":
-            _trace_reroute_connections(link.from_node, visited_reroutes, connected)
-        else:
-            connected.append(link.from_node)
-
-
-def _trace_downstream_connections(
-    reroute: bpy.types.Node,
-    visited_reroutes: set[bpy.types.Node],
-    connected: list[bpy.types.Node],
-) -> None:
-    """Trace downstream (output) connections from a reroute node."""
-    if not reroute.outputs:
-        return
-    output_links = reroute.outputs[0].links
-    if output_links is None:
-        return
-    for link in output_links:
-        if link.to_node is None:
-            continue
-        if link.to_node.type == "REROUTE":
-            _trace_reroute_connections(link.to_node, visited_reroutes, connected)
-        else:
-            connected.append(link.to_node)
-
-
-def _trace_reroute_connections(
-    current_reroute: bpy.types.Node,
-    visited_reroutes: set[bpy.types.Node],
-    connected: list[bpy.types.Node],
-) -> None:
-    """Recursively trace connections through reroute nodes."""
-    if current_reroute in visited_reroutes:
-        return
-    visited_reroutes.add(current_reroute)
-    _trace_upstream_connections(current_reroute, visited_reroutes, connected)
-    _trace_downstream_connections(current_reroute, visited_reroutes, connected)
-
-
 def _get_connected_non_reroute_nodes(
-    _node_tree: bpy.types.NodeTree,
+    node_tree: bpy.types.NodeTree,
     reroute: bpy.types.Node,
 ) -> list[bpy.types.Node]:
     """Get all non-reroute nodes connected to a reroute (following reroute chains)."""
     connected: list[bpy.types.Node] = []
     visited_reroutes: set[bpy.types.Node] = set()
-    _trace_reroute_connections(reroute, visited_reroutes, connected)
+
+    def trace_connections(current_reroute: bpy.types.Node) -> None:
+        if current_reroute in visited_reroutes:
+            return
+        visited_reroutes.add(current_reroute)
+
+        # Check upstream (input)
+        if current_reroute.inputs:
+            input_links = current_reroute.inputs[0].links
+            if input_links is not None:
+                for link in input_links:
+                    if link.from_node is not None:
+                        if link.from_node.type == "REROUTE":
+                            trace_connections(link.from_node)
+                        else:
+                            connected.append(link.from_node)
+
+        # Check downstream (output)
+        if current_reroute.outputs:
+            output_links = current_reroute.outputs[0].links
+            if output_links is not None:
+                for link in output_links:
+                    if link.to_node is not None:
+                        if link.to_node.type == "REROUTE":
+                            trace_connections(link.to_node)
+                        else:
+                            connected.append(link.to_node)
+
+    trace_connections(reroute)
     return connected
 
 
@@ -524,9 +480,7 @@ class GridCell:
     # Reroutes keyed by source for reuse: (src_x, src_y, socket_id) -> VirtualReroute
     reroutes: dict[tuple[int, int, str], VirtualReroute] = field(default_factory=dict)
 
-    def get_or_create_reroute(
-        self, source_key: tuple[int, int, str]
-    ) -> VirtualReroute:
+    def get_or_create_reroute(self, source_key: tuple[int, int, str]) -> VirtualReroute:
         """Get existing reroute for source or create new one."""
         if source_key not in self.reroutes:
             self.reroutes[source_key] = VirtualReroute(source_key=source_key)
@@ -663,7 +617,11 @@ class VirtualGrid:
 
 def _build_link_adjacency(
     node_tree: bpy.types.NodeTree,
-) -> tuple[dict[bpy.types.Node, list[bpy.types.Node]], dict[bpy.types.Node, list[bpy.types.Node]], set[bpy.types.Node]]:
+) -> tuple[
+    dict[bpy.types.Node, list[bpy.types.Node]],
+    dict[bpy.types.Node, list[bpy.types.Node]],
+    set[bpy.types.Node],
+]:
     """Pre-build adjacency lists from links for O(1) lookups.
 
     Returns:
@@ -799,7 +757,9 @@ def compute_node_input_depths(
 def _build_connection_maps(
     node_tree: bpy.types.NodeTree,
     valid_nodes: set[bpy.types.Node],
-) -> tuple[dict[bpy.types.Node, set[bpy.types.Node]], dict[bpy.types.Node, set[bpy.types.Node]]]:
+) -> tuple[
+    dict[bpy.types.Node, set[bpy.types.Node]], dict[bpy.types.Node, set[bpy.types.Node]]
+]:
     """Build maps of node connections for quick lookup.
 
     Returns (outputs_to, inputs_from) where:
@@ -960,14 +920,20 @@ def compute_node_columns(
         if sorting_method == "output":
             raw_positions[node] = float(out_d)
         elif sorting_method == "input":
-            raw_positions[node] = float(-in_d)  # Negate so higher input depth = more left
+            raw_positions[node] = float(
+                -in_d
+            )  # Negate so higher input depth = more left
         else:  # "combined"
             raw_positions[node] = float(out_d - in_d)
 
     # Build connection maps and refine with shaker-sort passes
-    outputs_to, inputs_from = _build_connection_maps(node_tree, set(raw_positions.keys()))
+    outputs_to, inputs_from = _build_connection_maps(
+        node_tree, set(raw_positions.keys())
+    )
     _refine_columns_shaker(
-        raw_positions, outputs_to, inputs_from,
+        raw_positions,
+        outputs_to,
+        inputs_from,
         use_gravity=use_gravity,
     )
 
@@ -1001,6 +967,7 @@ def layout_nodes_pcb_style(
     collapse_adjacent: bool = True,
     snap_to_grid: bool = False,
     grid_size: float = 20.0,
+    respect_dimensions: bool = True,
 ) -> list[bpy.types.Node]:
     """Layout nodes in a PCB/FPGA-style grid with routed connections.
 
@@ -1015,7 +982,6 @@ def layout_nodes_pcb_style(
             nodes being laid out. Useful when expanding selection to upstream nodes but
             wanting to anchor the result to the originally selected nodes.
         sorting_method: How to compute column positions:
-        sorting_method: How to compute column positions:
             - "combined": balanced using both input and output distance (default)
             - "output": prioritize distance from outputs
             - "input": prioritize distance from inputs
@@ -1025,6 +991,9 @@ def layout_nodes_pcb_style(
         collapse_adjacent: Whether to collapse adjacent reroutes in neighboring columns (default: True)
         snap_to_grid: Whether to snap final positions to the editor grid (default: False)
         grid_size: Size of the grid to snap to (default: 20.0, Blender's default)
+        respect_dimensions: If True, measure actual node heights and have tall nodes span
+            multiple grid rows to prevent vertical overlapping (default: False).
+            Note: Requires nodes to have been drawn at least once for dimensions to be available.
 
     Returns:
         List of reroute nodes created during the layout operation.
@@ -1064,7 +1033,13 @@ def layout_nodes_pcb_style(
     old_centroid_y = sum(n.location.y for n in centroid_nodes) / len(centroid_nodes)
 
     # Step 2: Build virtual grid with initial node placement
-    grid = _build_virtual_grid(columns, vertical_align)
+    grid = _build_virtual_grid(
+        columns,
+        vertical_align,
+        respect_dimensions=respect_dimensions,
+        cell_height=cell_height,
+        lane_gap=lane_gap,
+    )
 
     # Step 3: Collect all connections and add to grid
     _collect_connections(node_tree, grid, columns)
@@ -1073,10 +1048,26 @@ def layout_nodes_pcb_style(
     grid.route_all_connections()
 
     # Step 5: Mark which reroutes are actually used after optimization
-    _mark_used_reroutes(grid, collapse_vertical=collapse_vertical, collapse_horizontal=collapse_horizontal, collapse_adjacent=collapse_adjacent)
+    _mark_used_reroutes(
+        grid,
+        collapse_vertical=collapse_vertical,
+        collapse_horizontal=collapse_horizontal,
+        collapse_adjacent=collapse_adjacent,
+    )
 
     # Step 6: Realize the layout in Blender
-    _realize_layout(node_tree, grid, cell_width, cell_height, lane_width, lane_gap, nodes_to_layout, collapse_vertical=collapse_vertical, collapse_horizontal=collapse_horizontal, collapse_adjacent=collapse_adjacent)
+    _realize_layout(
+        node_tree,
+        grid,
+        cell_width,
+        cell_height,
+        lane_width,
+        lane_gap,
+        nodes_to_layout,
+        collapse_vertical=collapse_vertical,
+        collapse_horizontal=collapse_horizontal,
+        collapse_adjacent=collapse_adjacent,
+    )
 
     # Step 7: Compute new centroid and shift to match old position
     laid_out_nodes = list(columns.keys())
@@ -1095,8 +1086,12 @@ def layout_nodes_pcb_style(
         new_centroid_nodes = [n for n in centroid_nodes if n in columns]
         if not new_centroid_nodes:
             new_centroid_nodes = laid_out_nodes
-        new_centroid_x = sum(n.location.x for n in new_centroid_nodes) / len(new_centroid_nodes)
-        new_centroid_y = sum(n.location.y for n in new_centroid_nodes) / len(new_centroid_nodes)
+        new_centroid_x = sum(n.location.x for n in new_centroid_nodes) / len(
+            new_centroid_nodes
+        )
+        new_centroid_y = sum(n.location.y for n in new_centroid_nodes) / len(
+            new_centroid_nodes
+        )
 
         offset_x = old_centroid_x - new_centroid_x
         offset_y = old_centroid_y - new_centroid_y
@@ -1117,8 +1112,153 @@ def layout_nodes_pcb_style(
     return created_reroutes
 
 
-def _build_virtual_grid(columns: dict[bpy.types.Node, int], vertical_align: str = "CENTER") -> VirtualGrid:
-    """Build virtual grid with initial node placement based on column positions and vertical alignment."""
+# Socket type multipliers for height estimation (when NOT connected)
+# Some socket types render larger UI elements when displaying input fields
+# When connected, all sockets are effectively 1 row tall
+_SOCKET_HEIGHT_MULTIPLIERS: dict[str, float] = {
+    # Vector types (show X, Y, Z fields when not connected)
+    "VECTOR": 3.0,
+    "NodeSocketVector": 3.0,
+    "NodeSocketVectorDirection": 3.0,
+    "NodeSocketVectorEuler": 3.0,
+    "NodeSocketVectorTranslation": 3.0,
+    "NodeSocketVectorVelocity": 3.0,
+    "NodeSocketVectorAcceleration": 3.0,
+    "NodeSocketVectorXYZ": 3.0,
+    # Rotation (shows X, Y, Z, W or euler when not connected)
+    "ROTATION": 3.0,
+    "NodeSocketRotation": 3.0,
+    # Color types - inline color picker, always 1 row
+    # (no multiplier needed, defaults to 1.0)
+    # Matrix (4x4 = 16 values, but usually collapsed)
+    "MATRIX": 2.0,
+    "NodeSocketMatrix": 2.0,
+    # Default for standard types (float, int, bool, string, color, etc.) is 1.0
+}
+
+# Base height estimates (in pixels)
+_NODE_HEADER_HEIGHT = 30.0  # Node title bar
+_SOCKET_BASE_HEIGHT = 22.0  # Height per socket row
+
+
+def _estimate_node_height(node: bpy.types.Node) -> float:
+    """Estimate node height based on socket count and types.
+
+    Used as a fallback when node.dimensions returns (0, 0).
+
+    Args:
+        node: The node to estimate height for
+
+    Returns:
+        Estimated height in pixels
+    """
+    height = _NODE_HEADER_HEIGHT
+
+    # Count input sockets with their type multipliers
+    for socket in node.inputs:
+        if socket.enabled:
+            # Connected sockets are always 1 row tall (no expanded fields)
+            if socket.is_linked:
+                height += _SOCKET_BASE_HEIGHT
+            else:
+                # Get socket type - try both .type and bl_idname
+                socket_type = getattr(socket, "type", "") or ""
+                socket_idname = getattr(socket, "bl_idname", "") or ""
+
+                multiplier = _SOCKET_HEIGHT_MULTIPLIERS.get(
+                    socket_type, _SOCKET_HEIGHT_MULTIPLIERS.get(socket_idname, 1.0)
+                )
+                height += _SOCKET_BASE_HEIGHT * multiplier
+
+    # Count output sockets (usually simpler, no expanded fields)
+    for socket in node.outputs:
+        if socket.enabled:
+            height += _SOCKET_BASE_HEIGHT
+
+    # Add some padding
+    height += 10.0
+
+    return height
+
+
+def _calculate_node_row_span(
+    node: bpy.types.Node,
+    cell_height: float,
+    lane_gap: float = 0.0,
+    row_index: int = 0,
+) -> int:
+    """Calculate how many grid rows a node should span based on its dimensions.
+
+    Uses node.dimensions[1] (actual rendered height) to determine if the node
+    is taller than a single cell and needs to occupy multiple rows.
+
+    Falls back to estimating height based on socket count and types if
+    dimensions are not available (returns 0, 0).
+
+    Args:
+        node: The node to measure
+        cell_height: Height of a single grid cell
+        lane_gap: Gap between cells (adds to available space before requiring
+            an additional row)
+        row_index: The node's visual index within its column (0 = top).
+            Used to stagger reflow thresholds so nodes don't all jump at once.
+
+    Returns:
+        Number of rows this node should span (minimum 1)
+    """
+    import math
+
+    if cell_height <= 0:
+        return 1
+
+    # Get the actual rendered height of the node
+    # Note: dimensions may be (0, 0) if the node hasn't been drawn yet
+    # Dimensions are in screen pixels, so we need to divide by ui_scale
+    # to get the actual node size in Blender units
+    ui_scale = 1.0
+    ctx = bpy.context
+    if ctx is not None and ctx.preferences is not None:
+        ui_scale = ctx.preferences.system.ui_scale
+    node_height = node.dimensions[1] / ui_scale
+
+    # Fallback: estimate based on socket count and types
+    if node_height <= 0:
+        node_height = _estimate_node_height(node)
+
+    if node_height <= 0:
+        return 1
+
+    # Calculate how many cells this node needs
+    # A node in row 0 has cell_height space. If it extends into the lane_gap
+    # of the next row but not into the cell itself, it still fits in 1 row.
+    # For n rows: available = n * cell_height + (n-1) * lane_gap
+    # Rearranging: n >= (node_height + lane_gap) / (cell_height + lane_gap)
+    #
+    # To prevent all similar-height nodes from reflowing at once, we add a
+    # row-dependent stagger. Using lane_gap / (1 + row_index * 0.1) gives a
+    # smooth decay that starts almost linear but asymptotically approaches 0
+    stagger_bonus = lane_gap / (1.0 + row_index * 0.1) if row_index >= 0 else lane_gap
+    effective_cell = cell_height + lane_gap + stagger_bonus
+    rows_needed = math.ceil((node_height + lane_gap) / effective_cell) if effective_cell > 0 else 1
+
+    return max(1, rows_needed)
+
+
+def _build_virtual_grid(
+    columns: dict[bpy.types.Node, int],
+    vertical_align: str = "CENTER",
+    respect_dimensions: bool = False,
+    cell_height: float = 200.0,
+    lane_gap: float = 0.0,
+) -> VirtualGrid:
+    """Build virtual grid with initial node placement based on column positions and vertical alignment.
+
+    Args:
+        columns: Dict mapping nodes to their column indices
+        vertical_align: Vertical alignment (TOP, CENTER, BOTTOM)
+        respect_dimensions: If True, tall nodes will span multiple rows to avoid overlapping
+        cell_height: Height of each grid cell (used when respect_dimensions is True)
+    """
     grid = VirtualGrid()
     max_col = max(columns.values())
 
@@ -1129,23 +1269,62 @@ def _build_virtual_grid(columns: dict[bpy.types.Node, int], vertical_align: str 
             nodes_by_column[col] = []
         nodes_by_column[col].append(node)
 
-    # Calculate max height across all columns for vertical alignment
-    max_h = max(len(nodes) for nodes in nodes_by_column.values()) if nodes_by_column else 0
+    if respect_dimensions:
+        # Calculate row spans for each node and place with gaps for tall nodes
+        # First pass: calculate total rows needed per column (accounting for tall nodes)
+        column_total_rows: dict[int, int] = {}
+        for col, nodes in nodes_by_column.items():
+            nodes.sort(key=lambda n: (-n.location.y, n.name))
+            total_rows = 0
+            for i, node in enumerate(nodes):
+                span = _calculate_node_row_span(node, cell_height, lane_gap, i)
+                total_rows += span
+            column_total_rows[col] = total_rows
 
-    for col, nodes in nodes_by_column.items():
-        # Sort by original Y position (higher Y = top of screen, should come first)
-        # Use name as secondary sort key for consistent ordering when Y is equal
-        nodes.sort(key=lambda n: (-n.location.y, n.name))
-        grid_x = max_col - col  # Flip so inputs are on left, outputs are on right
-        h = len(nodes)
-        if vertical_align == "TOP":
-            y_offset = 0
-        elif vertical_align == "BOTTOM":
-            y_offset = max_h - h
-        else:  # CENTER
-            y_offset = (max_h - h) // 2
-        for y_idx, node in enumerate(nodes):
-            grid.place_node(node, grid_x, y_idx + y_offset)
+        max_h = max(column_total_rows.values()) if column_total_rows else 0
+
+        # Second pass: place nodes, skipping rows for tall nodes
+        for col, nodes in nodes_by_column.items():
+            nodes.sort(key=lambda n: (-n.location.y, n.name))
+            grid_x = max_col - col
+            total_rows = column_total_rows[col]
+
+            if vertical_align == "TOP":
+                y_offset = 0
+            elif vertical_align == "BOTTOM":
+                y_offset = max_h - total_rows
+            else:  # CENTER
+                y_offset = (max_h - total_rows) // 2
+
+            current_y = y_offset
+            for i, node in enumerate(nodes):
+                grid.place_node(node, grid_x, current_y)
+                # Skip rows based on node height
+                span = _calculate_node_row_span(node, cell_height, lane_gap, i)
+                current_y += span
+    else:
+        # Original behavior: all nodes occupy exactly one row
+        max_h = (
+            max(len(nodes) for nodes in nodes_by_column.values())
+            if nodes_by_column
+            else 0
+        )
+
+        for col, nodes in nodes_by_column.items():
+            # Sort by original Y position (higher Y = top of screen, should come first)
+            # Use name as secondary sort key for consistent ordering when Y is equal
+            nodes.sort(key=lambda n: (-n.location.y, n.name))
+            grid_x = max_col - col  # Flip so inputs are on left, outputs are on right
+            h = len(nodes)
+            if vertical_align == "TOP":
+                y_offset = 0
+            elif vertical_align == "BOTTOM":
+                y_offset = max_h - h
+            else:  # CENTER
+                y_offset = (max_h - h) // 2
+            for y_idx, node in enumerate(nodes):
+                grid.place_node(node, grid_x, y_idx + y_offset)
+
     return grid
 
 
@@ -1202,7 +1381,9 @@ def _mark_used_reroutes(
 
         # Apply optimization
         optimized_path = _optimize_routing_path(
-            path, conn.from_cell, conn.to_cell,
+            path,
+            conn.from_cell,
+            conn.to_cell,
             collapse_vertical=collapse_vertical,
             collapse_horizontal=collapse_horizontal,
             collapse_adjacent=collapse_adjacent,
@@ -1236,7 +1417,11 @@ def _compute_lane_areas(
         col_reroutes = col_max_reroutes.get(x, 0)
         # Find max row reroutes that intersect this column
         max_row_reroutes = max(
-            (row_max_reroutes.get(y, 0) for y in range(min_y, max_y + 1) if (x, y) in grid.cells),
+            (
+                row_max_reroutes.get(y, 0)
+                for y in range(min_y, max_y + 1)
+                if (x, y) in grid.cells
+            ),
             default=0,
         )
         lane_count = max(col_reroutes, max_row_reroutes, 1)
@@ -1248,7 +1433,11 @@ def _compute_lane_areas(
         row_reroutes = row_max_reroutes.get(y, 0)
         # Find max col reroutes that intersect this row
         max_col_reroutes = max(
-            (col_max_reroutes.get(x, 0) for x in range(min_x, max_x + 1) if (x, y) in grid.cells),
+            (
+                col_max_reroutes.get(x, 0)
+                for x in range(min_x, max_x + 1)
+                if (x, y) in grid.cells
+            ),
             default=0,
         )
         lane_count = max(row_reroutes, max_col_reroutes, 1)
@@ -1309,7 +1498,13 @@ def _realize_layout(
 
     # Calculate cumulative positions
     col_x_start, row_y_start = _compute_cell_positions(
-        grid, col_lane_area, row_lane_area, cell_width, cell_height, lane_width, lane_gap
+        grid,
+        col_lane_area,
+        row_lane_area,
+        cell_width,
+        cell_height,
+        lane_width,
+        lane_gap,
     )
 
     # Remove links only between nodes we're laying out
@@ -1341,12 +1536,16 @@ def _realize_layout(
         cell.node.location.y = -(row_y_start[cell.y] + lane_gap + lane_area_y)
 
     # Create reroute nodes in each cell - only for used reroutes, positioned diagonally
-    _create_reroute_nodes(node_tree, grid, col_lane_area, row_lane_area, col_x_start, row_y_start)
+    _create_reroute_nodes(
+        node_tree, grid, col_lane_area, row_lane_area, col_x_start, row_y_start
+    )
 
     # Create all connections through reroute chains
     for conn in grid.pending_connections:
         _realize_connection(
-            node_tree, grid, conn,
+            node_tree,
+            grid,
+            conn,
             collapse_vertical=collapse_vertical,
             collapse_horizontal=collapse_horizontal,
             collapse_adjacent=collapse_adjacent,
@@ -1422,7 +1621,9 @@ def _realize_connection(
 
     # Optimize path by melding unnecessary reroutes
     path = _optimize_routing_path(
-        path, conn.from_cell, conn.to_cell,
+        path,
+        conn.from_cell,
+        conn.to_cell,
         collapse_vertical=collapse_vertical,
         collapse_horizontal=collapse_horizontal,
         collapse_adjacent=collapse_adjacent,
@@ -1447,38 +1648,6 @@ def _realize_connection(
     node_tree.links.new(prev_socket, conn.to_socket)
 
 
-def _collapse_vertical_runs(path: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Collapse vertical runs - keep only the last reroute of each vertical segment."""
-    optimized: list[tuple[int, int]] = []
-    i = 0
-    while i < len(path):
-        j = i
-        while j + 1 < len(path) and path[j + 1][0] == path[i][0]:
-            j += 1
-        optimized.append(path[j])
-        i = j + 1
-    return optimized
-
-
-def _collapse_horizontal_runs(path: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Collapse horizontal runs of 3+ reroutes - keep first and last."""
-    horiz_optimized: list[tuple[int, int]] = []
-    i = 0
-    while i < len(path):
-        j = i
-        while j + 1 < len(path) and path[j + 1][1] == path[i][1]:
-            j += 1
-        run_length = j - i + 1
-        if run_length >= 3:
-            horiz_optimized.append(path[i])
-            horiz_optimized.append(path[j])
-        else:
-            for k in range(i, j + 1):
-                horiz_optimized.append(path[k])
-        i = j + 1
-    return horiz_optimized
-
-
 def _optimize_routing_path(
     path: list[tuple[int, int]],
     from_cell: tuple[int, int],
@@ -1500,14 +1669,44 @@ def _optimize_routing_path(
     if not path:
         return path
 
-    optimized = _collapse_vertical_runs(path) if collapse_vertical else path[:]
+    optimized: list[tuple[int, int]] = []
+    if collapse_vertical:
+        # Rule 1: Collapse vertical runs - keep only the last reroute of each vertical segment
+        i = 0
+        while i < len(path):
+            j = i
+            while j + 1 < len(path) and path[j + 1][0] == path[i][0]:
+                j += 1
+            optimized.append(path[j])
+            i = j + 1
+    else:
+        optimized = path[:]
 
     if collapse_horizontal:
-        optimized = _collapse_horizontal_runs(optimized)
+        # Rule 2: Collapse horizontal runs of 3+ reroutes - keep first and last
+        horiz_optimized: list[tuple[int, int]] = []
+        i = 0
+        while i < len(optimized):
+            # Find the end of the current horizontal run (same Y)
+            j = i
+            while j + 1 < len(optimized) and optimized[j + 1][1] == optimized[i][1]:
+                j += 1
+            run_length = j - i + 1
+            if run_length >= 3:
+                # Keep only first and last of this horizontal run
+                horiz_optimized.append(optimized[i])
+                horiz_optimized.append(optimized[j])
+            else:
+                # Keep all (1 or 2 reroutes)
+                for k in range(i, j + 1):
+                    horiz_optimized.append(optimized[k])
+            i = j + 1
+        optimized = horiz_optimized
 
-    # Rule 3: If after optimization, only one reroute remains at dest cell,
-    # and source is at X-1 (adjacent column), we can remove it entirely
-    if collapse_adjacent and len(optimized) == 1 and from_cell[0] + 1 == to_cell[0]:
-        return []
+    if collapse_adjacent:
+        # Rule 3: If after optimization, only one reroute remains at dest cell,
+        # and source is at X-1 (adjacent column), we can remove it entirely
+        if len(optimized) == 1 and from_cell[0] + 1 == to_cell[0]:
+            return []
 
     return optimized

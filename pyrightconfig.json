@@ -15,7 +15,8 @@
         "**/__pycache__",
         ".venv",
         ".git",
-        "dist"
+        "dist",
+        "addons/*/shared"
     ],
     "executionEnvironments": [
         {

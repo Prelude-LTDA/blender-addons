@@ -27,6 +27,7 @@ _status_state: dict[str, str | bool] = {
     "sorting_method": "combined",
     "use_gravity": False,
     "snap_to_grid": False,
+    "reflow_tall": True,
     "cell_width": "200",
     "cell_height": "200",
     "lane_width": "20",
@@ -60,7 +61,6 @@ def _draw_modal_status_bar(self: bpy.types.Header, _context: bpy.types.Context) 
     sub.label(text="", icon="EVENT_TAB")
     sub.label(text="Snap Toggle")
 
-
     # ── A: Vertical Alignment ──
     align_label = {"TOP": "Top", "CENTER": "Center", "BOTTOM": "Bottom"}.get(
         str(_status_state["vertical_align"]), "Center"
@@ -82,6 +82,12 @@ def _draw_modal_status_bar(self: bpy.types.Header, _context: bpy.types.Context) 
     sub = row.row(align=True)
     sub.label(text="", icon="EVENT_G")
     sub.label(text=f"Gravity ({'On' if gravity_on else 'Off'})")
+
+    # ── R: Reflow Tall Nodes ──
+    reflow_on = _status_state["reflow_tall"]
+    sub = row.row(align=True)
+    sub.label(text="", icon="EVENT_R")
+    sub.label(text=f"Reflow ({'On' if reflow_on else 'Off'})")
 
     # ── Arrows: Width/Height ──
     sub = row.row(align=True)
@@ -126,6 +132,7 @@ def _update_status_state(
     sorting_method: str,
     use_gravity: bool,
     snap_to_grid: bool,
+    reflow_tall: bool,
     cell_width: float,
     cell_height: float,
     lane_width: float,
@@ -136,6 +143,7 @@ def _update_status_state(
     _status_state["sorting_method"] = sorting_method
     _status_state["use_gravity"] = use_gravity
     _status_state["snap_to_grid"] = snap_to_grid
+    _status_state["reflow_tall"] = reflow_tall
     _status_state["cell_width"] = f"{cell_width:.0f}"
     _status_state["cell_height"] = f"{cell_height:.0f}"
     _status_state["lane_width"] = f"{lane_width:.0f}"
@@ -145,6 +153,29 @@ def _update_status_state(
 # =============================================================================
 # Node Traversal Helpers
 # =============================================================================
+
+
+def _calculate_max_node_width(node_tree: NodeTree) -> float:
+    """Calculate the maximum width across all non-reroute, non-frame nodes.
+
+    Returns:
+        Maximum node width, or 200.0 as fallback if no valid nodes found.
+    """
+    max_width = 0.0
+    ui_scale = 1.0
+    if bpy.context is not None and bpy.context.preferences is not None:
+        ui_scale = bpy.context.preferences.system.ui_scale
+
+    for node in node_tree.nodes:
+        if node.type in ("REROUTE", "FRAME"):
+            continue
+        # dimensions are in screen pixels, divide by ui_scale
+        width = node.dimensions[0] / ui_scale
+        if width > max_width:
+            max_width = width
+
+    # Fallback to 200 if no valid widths found (nodes not drawn yet)
+    return max_width if max_width > 0 else 200.0
 
 
 def _get_upstream_nodes(node_tree: NodeTree, start_nodes: set[Node]) -> set[Node]:
@@ -289,15 +320,11 @@ def _expand_selection_upstream_or_downstream(
         # If not, expand selection to include all upstream nodes
         if not _has_internal_connections(node_tree, nodes_to_layout):
             anchor_nodes = set(selected_nodes)
-            nodes_to_layout, expansion_type = _try_expand_nodes(
-                node_tree, anchor_nodes
-            )
+            nodes_to_layout, expansion_type = _try_expand_nodes(node_tree, anchor_nodes)
     elif len(selected_nodes) == 1:
         # Single node selected: get all upstream nodes
         anchor_nodes = set(selected_nodes)
-        nodes_to_layout, expansion_type = _try_expand_nodes(
-            node_tree, anchor_nodes
-        )
+        nodes_to_layout, expansion_type = _try_expand_nodes(node_tree, anchor_nodes)
 
     return nodes_to_layout, anchor_nodes, expansion_type
 
@@ -336,7 +363,9 @@ def _build_report_message(
             return f"Arranged {original_count} selected + {extra_count} upstream nodes"
         if expansion_type == "downstream":
             extra_count = node_count - original_count
-            return f"Arranged {original_count} selected + {extra_count} downstream nodes"
+            return (
+                f"Arranged {original_count} selected + {extra_count} downstream nodes"
+            )
         return f"Arranged {node_count} selected nodes"
     return f"Arranged {node_count} nodes"
 
@@ -346,7 +375,9 @@ class NODE_OT_auto_layout(bpy.types.Operator):
 
     bl_idname = "node.auto_layout"
     bl_label = "Auto Layout Nodes"
-    bl_description = "Arrange nodes in a clean PCB-style grid layout with organized connections"
+    bl_description = (
+        "Arrange nodes in a clean PCB-style grid layout with organized connections"
+    )
     bl_options = {"REGISTER", "UNDO"}
 
     # =========================
@@ -357,7 +388,11 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         name="Column Assignment",
         description="How to determine column positions",
         items=[
-            ("combined", "Input & Output Distance", "Balance between input and output distance"),
+            (
+                "combined",
+                "Input & Output Distance",
+                "Balance between input and output distance",
+            ),
             ("output", "Output Distance", "Prioritize distance from outputs"),
             ("input", "Input Distance", "Prioritize distance from inputs"),
         ],
@@ -388,8 +423,8 @@ class NODE_OT_auto_layout(bpy.types.Operator):
     cell_width: bpy.props.FloatProperty(
         name="Cell Width",
         description="Width of each grid cell",
-        default=200.0,
-        min=50.0,
+        default=0.0,  # 0 = auto-detect from max node width
+        min=0.0,
         max=1000.0,
     )  # type: ignore[valid-type]
 
@@ -397,7 +432,7 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         name="Cell Height",
         description="Height of each grid cell",
         default=200.0,
-        min=50.0,
+        min=10.0,
         max=1000.0,
     )  # type: ignore[valid-type]
 
@@ -458,6 +493,16 @@ class NODE_OT_auto_layout(bpy.types.Operator):
     )  # type: ignore[valid-type]
 
     # =========================
+    # Tall Node Handling
+    # =========================
+
+    reflow_tall: bpy.props.BoolProperty(
+        name="Reflow Tall Nodes",
+        description="Measure actual node heights and have tall nodes span multiple rows to prevent overlapping",
+        default=True,
+    )  # type: ignore[valid-type]
+
+    # =========================
     # Move (set during modal)
     # =========================
 
@@ -496,7 +541,11 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             return {"CANCELLED"}
 
         # Determine which nodes to layout
-        selected_nodes = [n for n in node_tree.nodes if n.select and n.type not in ("FRAME", "REROUTE")]
+        selected_nodes = [
+            n
+            for n in node_tree.nodes
+            if n.select and n.type not in ("FRAME", "REROUTE")
+        ]
 
         # If only frames are selected, layout their contents
         selected_frames = [n for n in node_tree.nodes if n.select and n.type == "FRAME"]
@@ -506,8 +555,8 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         # Only use subset if we have more than 1 node to layout
         # Track original selection for anchoring when we expand
         original_count = len(selected_nodes)
-        nodes_to_layout, anchor_nodes, expansion_type = _expand_selection_upstream_or_downstream(
-            node_tree, selected_nodes
+        nodes_to_layout, anchor_nodes, expansion_type = (
+            _expand_selection_upstream_or_downstream(node_tree, selected_nodes)
         )
 
         # Count nodes for reporting
@@ -534,18 +583,25 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             collapse_adjacent=self.collapse_adjacent,
             snap_to_grid=self.snap_to_grid,
             grid_size=self.grid_size,
+            respect_dimensions=self.reflow_tall,
         )
 
         # Update selection based on what was laid out
         self._update_node_selection(node_tree, nodes_to_layout, created_reroutes)
 
         # Collect all affected nodes and apply move offset
-        all_affected_nodes = list(nodes_to_layout) + created_reroutes if nodes_to_layout else []
+        all_affected_nodes = (
+            list(nodes_to_layout) + created_reroutes if nodes_to_layout else []
+        )
         self._apply_move_offset(all_affected_nodes)
 
         # Build report message and store state for modal grab mode
-        report_msg = _build_report_message(nodes_to_layout, expansion_type, original_count, node_count)
-        self._store_grab_state(nodes_to_layout, anchor_nodes, all_affected_nodes, report_msg)
+        report_msg = _build_report_message(
+            nodes_to_layout, expansion_type, original_count, node_count
+        )
+        self._store_grab_state(
+            nodes_to_layout, anchor_nodes, all_affected_nodes, report_msg
+        )
 
         return {"FINISHED"}
 
@@ -590,6 +646,12 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         # Reset move offset for fresh invocation
         self.move_offset = (0.0, 0.0)
 
+        # Auto-detect cell_width from max node width if set to 0 (auto)
+        if self.cell_width <= 0:
+            space = context.space_data
+            if space is not None and hasattr(space, "edit_tree") and space.edit_tree is not None:  # type: ignore[union-attr]
+                self.cell_width = _calculate_max_node_width(space.edit_tree)  # type: ignore[union-attr]
+
         result = self.execute(context)
 
         if result != {"FINISHED"}:
@@ -607,7 +669,10 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         if self._enter_grab_mode and self._grab_nodes:
             self._initial_mouse_x = event.mouse_region_x
             self._initial_mouse_y = event.mouse_region_y
-            self._current_offset = (0.0, 0.0)  # Track cumulative offset for incremental movement
+            self._current_offset = (
+                0.0,
+                0.0,
+            )  # Track cumulative offset for incremental movement
 
             # Set move cursor
             if context.window is not None:
@@ -630,6 +695,7 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             sorting_method=self.sorting_method,
             use_gravity=self.use_gravity,
             snap_to_grid=self.snap_to_grid,
+            reflow_tall=self.reflow_tall,
             cell_width=self.cell_width,
             cell_height=self.cell_height,
             lane_width=self.lane_width,
@@ -647,12 +713,20 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         region = context.region
         if region is not None:
             view2d = region.view2d
-            init_vx, init_vy = view2d.region_to_view(self._initial_mouse_x, self._initial_mouse_y)
-            curr_vx, curr_vy = view2d.region_to_view(event.mouse_region_x, event.mouse_region_y)
+            init_vx, init_vy = view2d.region_to_view(
+                self._initial_mouse_x, self._initial_mouse_y
+            )
+            curr_vx, curr_vy = view2d.region_to_view(
+                event.mouse_region_x, event.mouse_region_y
+            )
             node_dx = curr_vx - init_vx
             node_dy = curr_vy - init_vy
 
-            pixel_size = context.preferences.system.pixel_size if context.preferences is not None else 1.0
+            pixel_size = (
+                context.preferences.system.pixel_size
+                if context.preferences is not None
+                else 1.0
+            )
             node_dx /= pixel_size
             node_dy /= pixel_size
         else:
@@ -717,14 +791,24 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             self.snap_to_grid = not self.snap_to_grid
         elif event.type == "A":
             alignments = ["TOP", "CENTER", "BOTTOM"]
-            current_idx = alignments.index(self.vertical_align) if self.vertical_align in alignments else 0
+            current_idx = (
+                alignments.index(self.vertical_align)
+                if self.vertical_align in alignments
+                else 0
+            )
             self.vertical_align = alignments[(current_idx + 1) % 3]
         elif event.type == "G":
             self.use_gravity = not self.use_gravity
         elif event.type == "C":
             methods = ["combined", "output", "input"]
-            current_idx = methods.index(self.sorting_method) if self.sorting_method in methods else 0
+            current_idx = (
+                methods.index(self.sorting_method)
+                if self.sorting_method in methods
+                else 0
+            )
             self.sorting_method = methods[(current_idx + 1) % 3]
+        elif event.type == "R":
+            self.reflow_tall = not self.reflow_tall
         else:
             return None
 
@@ -732,7 +816,9 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         self._update_status_text(context)
         return {"RUNNING_MODAL"}
 
-    def _handle_dimension_adjust(self, context: Context, event: Event) -> set[str] | None:
+    def _handle_dimension_adjust(
+        self, context: Context, event: Event
+    ) -> set[str] | None:
         """Handle dimension adjustment keys. Returns result or None if not handled."""
         if event.value != "PRESS":
             return None
@@ -744,11 +830,11 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         if event.type == "UP_ARROW":
             self.cell_height += step
         elif event.type == "DOWN_ARROW":
-            self.cell_height = max(50.0, self.cell_height - step)
+            self.cell_height = max(10.0, self.cell_height - step)
         elif event.type == "RIGHT_ARROW":
             self.cell_width += step
         elif event.type == "LEFT_ARROW":
-            self.cell_width = max(50.0, self.cell_width - step)
+            self.cell_width = max(10.0, self.cell_width - step)
         elif event.type == "LEFT_BRACKET":
             lane_step = 5.0 if not event.shift else 1.0
             self.lane_width = max(5.0, self.lane_width - lane_step)
@@ -767,7 +853,10 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         if event.type == "MOUSEMOVE":
             return self._handle_mouse_move(context, event)
 
-        if event.type in {"LEFTMOUSE", "RET", "NUMPAD_ENTER"} and event.value == "PRESS":
+        if (
+            event.type in {"LEFTMOUSE", "RET", "NUMPAD_ENTER"}
+            and event.value == "PRESS"
+        ):
             return self._handle_confirm(context)
 
         if event.type in {"RIGHTMOUSE", "ESC"} and event.value == "PRESS":
@@ -810,6 +899,7 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             collapse_adjacent=self.collapse_adjacent,
             snap_to_grid=self.snap_to_grid,
             grid_size=self.grid_size,
+            respect_dimensions=self.reflow_tall,
         )
 
         # Update grab nodes
