@@ -22,7 +22,6 @@ _module_names: tuple[str, ...] = (
     "sockets",
     "msgbus",
     "chunks",
-    "node_layout",
     "generation",
     "operators",
     "panels",

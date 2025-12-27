@@ -14,11 +14,19 @@
     "exclude": [
         "**/__pycache__",
         ".venv",
-        ".git"
+        ".git",
+        "dist"
     ],
     "executionEnvironments": [
         {
-            "root": ".",
+            "root": "addons",
+            "extraPaths": [
+                ".venv/lib/python3.11/site-packages",
+                "shared"
+            ]
+        },
+        {
+            "root": "shared",
             "extraPaths": [
                 ".venv/lib/python3.11/site-packages"
             ]

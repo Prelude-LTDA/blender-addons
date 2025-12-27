@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import bpy
 
 from .chunks import calculate_chunk_bounds
-from .node_layout import layout_nodes_pcb_style
+from .shared.node_layout import layout_nodes_pcb_style
 from .typing_utils import get_object_props, get_scene_props
 
 if TYPE_CHECKING:
