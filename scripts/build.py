@@ -36,7 +36,7 @@ def find_blender() -> str:
 
     # Check if BLENDER_PATH env var is set
     blender_path = os.environ.get("BLENDER_PATH")
-    if blender_path and os.path.isfile(blender_path):
+    if blender_path and Path(blender_path).is_file():
         return blender_path
 
     raise RuntimeError(
@@ -121,6 +121,7 @@ def build_addon(addon_name: str, blender: str) -> Path | None:
             ],
             capture_output=True,
             text=True,
+            check=False,
         )
 
         if result.returncode != 0:

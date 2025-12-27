@@ -222,11 +222,13 @@ def _get_downstream_nodes(node_tree: NodeTree, start_nodes: set[Node]) -> set[No
     while to_visit:
         current = to_visit.pop()
         for downstream_node in output_targets.get(current, []):
-            if downstream_node not in result:
-                # Only include and continue if this node has fewer than 2 connected inputs
-                if connected_inputs.get(downstream_node, 0) < 2:
-                    result.add(downstream_node)
-                    to_visit.append(downstream_node)
+            # Only include and continue if this node has fewer than 2 connected inputs
+            if (
+                downstream_node not in result
+                and connected_inputs.get(downstream_node, 0) < 2
+            ):
+                result.add(downstream_node)
+                to_visit.append(downstream_node)
 
     return result
 
@@ -243,6 +245,100 @@ def _has_internal_connections(node_tree: NodeTree, nodes: set[Node]) -> bool:
         if link.from_node in nodes and link.to_node in nodes:
             return True
     return False
+
+
+def _get_frame_children(
+    node_tree: bpy.types.NodeTree,
+    selected_frames: list[bpy.types.Node],
+) -> list[bpy.types.Node]:
+    """Get all children of selected frames (including nested frames)."""
+    frame_children: set[bpy.types.Node] = set()
+    for frame in selected_frames:
+        for node in node_tree.nodes:
+            if node.type in ("FRAME", "REROUTE"):
+                continue
+            # Check if node is inside this frame (direct or nested)
+            parent = node.parent
+            while parent is not None:
+                if parent == frame:
+                    frame_children.add(node)
+                    break
+                parent = parent.parent
+    return list(frame_children)
+
+
+def _expand_selection_upstream_or_downstream(
+    node_tree: bpy.types.NodeTree,
+    selected_nodes: list[bpy.types.Node],
+) -> tuple[set[bpy.types.Node] | None, set[bpy.types.Node] | None, str | None]:
+    """Expand selection to include upstream or downstream nodes if needed.
+
+    Returns:
+        Tuple of (nodes_to_layout, anchor_nodes, expansion_type)
+    """
+    if not selected_nodes:
+        return None, None, None
+
+    nodes_to_layout: set[bpy.types.Node] | None = None
+    anchor_nodes: set[bpy.types.Node] | None = None
+    expansion_type: str | None = None
+
+    if len(selected_nodes) > 1:
+        nodes_to_layout = set(selected_nodes)
+        # Check if selected nodes have connections between them
+        # If not, expand selection to include all upstream nodes
+        if not _has_internal_connections(node_tree, nodes_to_layout):
+            anchor_nodes = set(selected_nodes)
+            nodes_to_layout, expansion_type = _try_expand_nodes(
+                node_tree, anchor_nodes
+            )
+    elif len(selected_nodes) == 1:
+        # Single node selected: get all upstream nodes
+        anchor_nodes = set(selected_nodes)
+        nodes_to_layout, expansion_type = _try_expand_nodes(
+            node_tree, anchor_nodes
+        )
+
+    return nodes_to_layout, anchor_nodes, expansion_type
+
+
+def _try_expand_nodes(
+    node_tree: bpy.types.NodeTree,
+    anchor_nodes: set[bpy.types.Node],
+) -> tuple[set[bpy.types.Node], str | None]:
+    """Try to expand nodes upstream first, then downstream if no expansion found."""
+    nodes_to_layout = _get_upstream_nodes(node_tree, anchor_nodes)
+    nodes_to_layout = {n for n in nodes_to_layout if n.type not in ("FRAME", "REROUTE")}
+
+    if nodes_to_layout != anchor_nodes:
+        return nodes_to_layout, "upstream"
+
+    # Try downstream
+    nodes_to_layout = _get_downstream_nodes(node_tree, anchor_nodes)
+    nodes_to_layout = {n for n in nodes_to_layout if n.type not in ("FRAME", "REROUTE")}
+
+    if nodes_to_layout != anchor_nodes:
+        return nodes_to_layout, "downstream"
+
+    return nodes_to_layout, None
+
+
+def _build_report_message(
+    nodes_to_layout: set[bpy.types.Node] | None,
+    expansion_type: str | None,
+    original_count: int,
+    node_count: int,
+) -> str:
+    """Build the report message for the layout operation."""
+    if nodes_to_layout is not None:
+        if expansion_type == "upstream":
+            extra_count = node_count - original_count
+            return f"Arranged {original_count} selected + {extra_count} upstream nodes"
+        if expansion_type == "downstream":
+            extra_count = node_count - original_count
+            return f"Arranged {original_count} selected + {extra_count} downstream nodes"
+        return f"Arranged {node_count} selected nodes"
+    return f"Arranged {node_count} nodes"
 
 
 class NODE_OT_auto_layout(bpy.types.Operator):
@@ -405,67 +501,21 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         # If only frames are selected, layout their contents
         selected_frames = [n for n in node_tree.nodes if n.select and n.type == "FRAME"]
         if not selected_nodes and selected_frames:
-            # Get all children of selected frames (including nested frames)
-            frame_children: set[bpy.types.Node] = set()
-            for frame in selected_frames:
-                for node in node_tree.nodes:
-                    if node.type in ("FRAME", "REROUTE"):
-                        continue
-                    # Check if node is inside this frame (direct or nested)
-                    parent = node.parent
-                    while parent is not None:
-                        if parent == frame:
-                            frame_children.add(node)
-                            break
-                        parent = parent.parent
-            selected_nodes = list(frame_children)
+            selected_nodes = _get_frame_children(node_tree, selected_frames)
 
         # Only use subset if we have more than 1 node to layout
         # Track original selection for anchoring when we expand
-        nodes_to_layout: set[bpy.types.Node] | None = None
-        anchor_nodes: set[bpy.types.Node] | None = None
-        expansion_type: str | None = None  # "upstream", "downstream", or None
         original_count = len(selected_nodes)
-
-        if len(selected_nodes) > 1:
-            nodes_to_layout = set(selected_nodes)
-            # Check if selected nodes have connections between them
-            # If not, expand selection to include all upstream nodes
-            if not _has_internal_connections(node_tree, nodes_to_layout):
-                # Remember original selection for anchoring
-                anchor_nodes = set(selected_nodes)
-                nodes_to_layout = _get_upstream_nodes(node_tree, nodes_to_layout)
-                # Filter out frames and reroutes from the result
-                nodes_to_layout = {n for n in nodes_to_layout if n.type not in ("FRAME", "REROUTE")}
-                # If no upstream nodes found (only the original nodes), try downstream instead
-                if nodes_to_layout == anchor_nodes:
-                    nodes_to_layout = _get_downstream_nodes(node_tree, anchor_nodes)
-                    nodes_to_layout = {n for n in nodes_to_layout if n.type not in ("FRAME", "REROUTE")}
-                    if nodes_to_layout != anchor_nodes:
-                        expansion_type = "downstream"
-                else:
-                    expansion_type = "upstream"
-        elif len(selected_nodes) == 1:
-            # Single node selected: get all upstream nodes
-            # Anchor to the originally selected node
-            anchor_nodes = set(selected_nodes)
-            nodes_to_layout = _get_upstream_nodes(node_tree, anchor_nodes)
-            # Filter out frames and reroutes from the result
-            nodes_to_layout = {n for n in nodes_to_layout if n.type not in ("FRAME", "REROUTE")}
-            # If no upstream nodes found (only the original node), try downstream instead
-            if nodes_to_layout == anchor_nodes:
-                nodes_to_layout = _get_downstream_nodes(node_tree, anchor_nodes)
-                nodes_to_layout = {n for n in nodes_to_layout if n.type not in ("FRAME", "REROUTE")}
-                if nodes_to_layout != anchor_nodes:
-                    expansion_type = "downstream"
-            else:
-                expansion_type = "upstream"
+        nodes_to_layout, anchor_nodes, expansion_type = _expand_selection_upstream_or_downstream(
+            node_tree, selected_nodes
+        )
 
         # Count nodes for reporting
-        if nodes_to_layout is not None:
-            node_count = len(nodes_to_layout)
-        else:
-            node_count = len([n for n in node_tree.nodes if n.type not in ("REROUTE", "FRAME")])
+        node_count = (
+            len(nodes_to_layout)
+            if nodes_to_layout is not None
+            else len([n for n in node_tree.nodes if n.type not in ("REROUTE", "FRAME")])
+        )
 
         # Apply the layout
         created_reroutes = layout_nodes_pcb_style(
@@ -486,50 +536,54 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             grid_size=self.grid_size,
         )
 
-        # If we expanded the selection (upstream nodes or frame contents),
-        # select all laid out nodes so user can easily move them
+        # Update selection based on what was laid out
+        self._update_node_selection(node_tree, nodes_to_layout, created_reroutes)
+
+        # Collect all affected nodes and apply move offset
+        all_affected_nodes = list(nodes_to_layout) + created_reroutes if nodes_to_layout else []
+        self._apply_move_offset(all_affected_nodes)
+
+        # Build report message and store state for modal grab mode
+        report_msg = _build_report_message(nodes_to_layout, expansion_type, original_count, node_count)
+        self._store_grab_state(nodes_to_layout, anchor_nodes, all_affected_nodes, report_msg)
+
+        return {"FINISHED"}
+
+    def _update_node_selection(
+        self,
+        node_tree: bpy.types.NodeTree,
+        nodes_to_layout: set[bpy.types.Node] | None,
+        created_reroutes: list[bpy.types.Node],
+    ) -> None:
+        """Update node selection after layout."""
         if nodes_to_layout is not None:
             reroute_set = set(created_reroutes)
             for node in node_tree.nodes:
                 node.select = node in nodes_to_layout or node in reroute_set
         else:
-            # Whole graph layout - deselect all
             for node in node_tree.nodes:
                 node.select = False
 
-        # Collect all affected nodes
-        all_affected_nodes = list(nodes_to_layout) + created_reroutes if nodes_to_layout else []
-
-        # Apply move offset (set during modal, or via F9 redo)
-        if all_affected_nodes and (self.move_offset[0] != 0 or self.move_offset[1] != 0):
-            for node in all_affected_nodes:
+    def _apply_move_offset(self, nodes: list[bpy.types.Node]) -> None:
+        """Apply move offset to nodes (set during modal or via F9 redo)."""
+        if nodes and (self.move_offset[0] != 0 or self.move_offset[1] != 0):
+            for node in nodes:
                 node.location.x += self.move_offset[0]
                 node.location.y += self.move_offset[1]
 
-        # Build report message
-        if nodes_to_layout is not None:
-            if expansion_type == "upstream":
-                extra_count = node_count - original_count
-                report_msg = f"Arranged {original_count} selected + {extra_count} upstream nodes"
-            elif expansion_type == "downstream":
-                extra_count = node_count - original_count
-                report_msg = f"Arranged {original_count} selected + {extra_count} downstream nodes"
-            else:
-                report_msg = f"Arranged {node_count} selected nodes"
-        else:
-            report_msg = f"Arranged {node_count} nodes"
-
-        # Store state for modal grab mode
+    def _store_grab_state(
+        self,
+        nodes_to_layout: set[bpy.types.Node] | None,
+        anchor_nodes: set[bpy.types.Node] | None,
+        all_affected_nodes: list[bpy.types.Node],
+        report_msg: str,
+    ) -> None:
+        """Store state for modal grab mode."""
         self._enter_grab_mode = nodes_to_layout is not None
         self._grab_nodes = all_affected_nodes
         self._anchor_nodes = anchor_nodes
         self._nodes_to_layout = nodes_to_layout
         self._report_msg = report_msg
-
-        # Only report immediately if not entering grab mode
-        # (grab mode will report on confirm)
-
-        return {"FINISHED"}
 
     def invoke(self, context: Context, event: Event) -> set[str]:  # type: ignore[override]
         """Execute layout and optionally enter grab mode for subsets."""
@@ -588,149 +642,146 @@ class NODE_OT_auto_layout(bpy.types.Operator):
                     area.tag_redraw()
                     break
 
-    def modal(self, context: Context, event: Event) -> set[str]:  # type: ignore[override]
-        """Handle modal grab mode."""
-        if event.type == "MOUSEMOVE":
-            # Convert mouse positions to view space (accounts for zoom/pan)
-            region = context.region
-            if region is not None:
-                view2d = region.view2d
-                # Convert initial and current mouse positions to view coordinates
-                init_vx, init_vy = view2d.region_to_view(self._initial_mouse_x, self._initial_mouse_y)
-                curr_vx, curr_vy = view2d.region_to_view(event.mouse_region_x, event.mouse_region_y)
-                node_dx = curr_vx - init_vx
-                node_dy = curr_vy - init_vy
+    def _handle_mouse_move(self, context: Context, event: Event) -> set[str]:
+        """Handle mouse movement during modal grab."""
+        region = context.region
+        if region is not None:
+            view2d = region.view2d
+            init_vx, init_vy = view2d.region_to_view(self._initial_mouse_x, self._initial_mouse_y)
+            curr_vx, curr_vy = view2d.region_to_view(event.mouse_region_x, event.mouse_region_y)
+            node_dx = curr_vx - init_vx
+            node_dy = curr_vy - init_vy
 
-                # Account for pixel size (HiDPI/Retina displays)
-                pixel_size = context.preferences.system.pixel_size if context.preferences is not None else 1.0
-                node_dx /= pixel_size
-                node_dy /= pixel_size
-            else:
-                dx = event.mouse_region_x - self._initial_mouse_x
-                dy = event.mouse_region_y - self._initial_mouse_y
-                node_dx = dx
-                node_dy = -dy
+            pixel_size = context.preferences.system.pixel_size if context.preferences is not None else 1.0
+            node_dx /= pixel_size
+            node_dy /= pixel_size
+        else:
+            dx = event.mouse_region_x - self._initial_mouse_x
+            dy = event.mouse_region_y - self._initial_mouse_y
+            node_dx = dx
+            node_dy = -dy
 
-            # Apply snap to grid during grab (Ctrl inverts snap behavior)
-            snap_active = self.snap_to_grid != event.ctrl  # XOR: ctrl inverts
-            if snap_active:
-                grid = self.grid_size
-                node_dx = round(node_dx / grid) * grid
-                node_dy = round(node_dy / grid) * grid
+        # Apply snap to grid during grab (Ctrl inverts snap behavior)
+        snap_active = self.snap_to_grid != event.ctrl
+        if snap_active:
+            grid = self.grid_size
+            node_dx = round(node_dx / grid) * grid
+            node_dy = round(node_dy / grid) * grid
 
-            # Calculate incremental delta from last frame
-            prev_offset = getattr(self, "_current_offset", (0.0, 0.0))
-            inc_dx = node_dx - prev_offset[0]
-            inc_dy = node_dy - prev_offset[1]
+        # Calculate incremental delta from last frame
+        prev_offset = getattr(self, "_current_offset", (0.0, 0.0))
+        inc_dx = node_dx - prev_offset[0]
+        inc_dy = node_dy - prev_offset[1]
+        self._current_offset = (node_dx, node_dy)
 
-            # Store current offset for F9 redo and next frame
-            self._current_offset = (node_dx, node_dy)
+        if inc_dx != 0 or inc_dy != 0:
+            for node in self._grab_nodes:
+                node.location.x += inc_dx
+                node.location.y += inc_dy
 
-            # Apply incremental offset to all grabbed nodes
-            if inc_dx != 0 or inc_dy != 0:
-                for node in self._grab_nodes:
-                    node.location.x += inc_dx
-                    node.location.y += inc_dy
+        if context.area:
+            context.area.tag_redraw()
+        return {"RUNNING_MODAL"}
 
-            if context.area:
-                context.area.tag_redraw()
-            return {"RUNNING_MODAL"}
+    def _handle_confirm(self, context: Context) -> set[str]:
+        """Handle confirmation of modal grab."""
+        if hasattr(self, "_current_offset"):
+            self.move_offset = self._current_offset
+        if context.window is not None:
+            context.window.cursor_modal_restore()
+        _disable_status_bar(context)
+        if hasattr(self, "_report_msg"):
+            self.report({"INFO"}, self._report_msg)
+        return {"FINISHED"}
 
-        elif event.type in {"LEFTMOUSE", "RET", "NUMPAD_ENTER"} and event.value == "PRESS":
-            # Confirm placement - store offset in property for F9 redo
-            if hasattr(self, "_current_offset"):
-                self.move_offset = self._current_offset
-            # Restore cursor and disable status bar
-            if context.window is not None:
-                context.window.cursor_modal_restore()
-            _disable_status_bar(context)
-            # Report success now
-            if hasattr(self, "_report_msg"):
-                self.report({"INFO"}, self._report_msg)
-            return {"FINISHED"}
+    def _handle_cancel(self, context: Context) -> set[str]:
+        """Handle cancellation of modal grab."""
+        current_offset = getattr(self, "_current_offset", (0.0, 0.0))
+        if current_offset[0] != 0 or current_offset[1] != 0:
+            for node in self._grab_nodes:
+                node.location.x -= current_offset[0]
+                node.location.y -= current_offset[1]
+        if context.area:
+            context.area.tag_redraw()
+        if context.window is not None:
+            context.window.cursor_modal_restore()
+        _disable_status_bar(context)
+        return {"CANCELLED"}
 
-        elif event.type in {"RIGHTMOUSE", "ESC"} and event.value == "PRESS":
-            # Cancel - undo the movement by applying negative of current offset
-            current_offset = getattr(self, "_current_offset", (0.0, 0.0))
-            if current_offset[0] != 0 or current_offset[1] != 0:
-                for node in self._grab_nodes:
-                    node.location.x -= current_offset[0]
-                    node.location.y -= current_offset[1]
-            if context.area:
-                context.area.tag_redraw()
-            # Restore cursor and disable status bar
-            if context.window is not None:
-                context.window.cursor_modal_restore()
-            _disable_status_bar(context)
-            return {"CANCELLED"}
+    def _handle_setting_toggle(self, context: Context, event: Event) -> set[str] | None:
+        """Handle setting toggle keys. Returns result or None if not handled."""
+        if event.value != "PRESS":
+            return None
 
-        # Shift+Tab: Toggle snap to grid (like native grab)
-        elif event.type == "TAB" and event.value == "PRESS" and event.shift:
+        if event.type == "TAB" and event.shift:
             self.snap_to_grid = not self.snap_to_grid
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
-
-        # A: Cycle vertical alignment (Top -> Center -> Bottom -> Top)
-        elif event.type == "A" and event.value == "PRESS":
+        elif event.type == "A":
             alignments = ["TOP", "CENTER", "BOTTOM"]
             current_idx = alignments.index(self.vertical_align) if self.vertical_align in alignments else 0
             self.vertical_align = alignments[(current_idx + 1) % 3]
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
-
-        # G: Toggle gravity
-        elif event.type == "G" and event.value == "PRESS":
+        elif event.type == "G":
             self.use_gravity = not self.use_gravity
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
-
-        # C: Cycle column assignment method
-        elif event.type == "C" and event.value == "PRESS":
+        elif event.type == "C":
             methods = ["combined", "output", "input"]
             current_idx = methods.index(self.sorting_method) if self.sorting_method in methods else 0
             self.sorting_method = methods[(current_idx + 1) % 3]
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
+        else:
+            return None
 
-        # Up/Down arrows: Adjust cell height
-        elif event.type == "UP_ARROW" and event.value == "PRESS":
-            self.cell_height += 20.0 if not event.shift else 5.0
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
-        elif event.type == "DOWN_ARROW" and event.value == "PRESS":
-            self.cell_height = max(50.0, self.cell_height - (20.0 if not event.shift else 5.0))
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
+        self._re_layout_and_grab(context, event)
+        self._update_status_text(context)
+        return {"RUNNING_MODAL"}
 
-        # Left/Right arrows: Adjust cell width
-        elif event.type == "RIGHT_ARROW" and event.value == "PRESS":
-            self.cell_width += 20.0 if not event.shift else 5.0
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
-        elif event.type == "LEFT_ARROW" and event.value == "PRESS":
-            self.cell_width = max(50.0, self.cell_width - (20.0 if not event.shift else 5.0))
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
+    def _handle_dimension_adjust(self, context: Context, event: Event) -> set[str] | None:
+        """Handle dimension adjustment keys. Returns result or None if not handled."""
+        if event.value != "PRESS":
+            return None
 
-        # [ and ]: Adjust lane width
-        elif event.type == "LEFT_BRACKET" and event.value == "PRESS":
-            self.lane_width = max(5.0, self.lane_width - (5.0 if not event.shift else 1.0))
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
-        elif event.type == "RIGHT_BRACKET" and event.value == "PRESS":
-            self.lane_width += 5.0 if not event.shift else 1.0
-            self._re_layout_and_grab(context, event)
-            self._update_status_text(context)
-            return {"RUNNING_MODAL"}
+        step_large = 20.0
+        step_small = 5.0
+        step = step_small if event.shift else step_large
+
+        if event.type == "UP_ARROW":
+            self.cell_height += step
+        elif event.type == "DOWN_ARROW":
+            self.cell_height = max(50.0, self.cell_height - step)
+        elif event.type == "RIGHT_ARROW":
+            self.cell_width += step
+        elif event.type == "LEFT_ARROW":
+            self.cell_width = max(50.0, self.cell_width - step)
+        elif event.type == "LEFT_BRACKET":
+            lane_step = 5.0 if not event.shift else 1.0
+            self.lane_width = max(5.0, self.lane_width - lane_step)
+        elif event.type == "RIGHT_BRACKET":
+            lane_step = 5.0 if not event.shift else 1.0
+            self.lane_width += lane_step
+        else:
+            return None
+
+        self._re_layout_and_grab(context, event)
+        self._update_status_text(context)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context: Context, event: Event) -> set[str]:  # type: ignore[override]
+        """Handle modal grab mode."""
+        if event.type == "MOUSEMOVE":
+            return self._handle_mouse_move(context, event)
+
+        if event.type in {"LEFTMOUSE", "RET", "NUMPAD_ENTER"} and event.value == "PRESS":
+            return self._handle_confirm(context)
+
+        if event.type in {"RIGHTMOUSE", "ESC"} and event.value == "PRESS":
+            return self._handle_cancel(context)
+
+        # Check setting toggles
+        result = self._handle_setting_toggle(context, event)
+        if result is not None:
+            return result
+
+        # Check dimension adjustments
+        result = self._handle_dimension_adjust(context, event)
+        if result is not None:
+            return result
 
         return {"RUNNING_MODAL"}
 
