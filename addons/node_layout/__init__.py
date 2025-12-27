@@ -98,7 +98,7 @@ def register() -> None:
     wm = bpy.context.window_manager
     if wm.keyconfigs.addon is not None:
         km = wm.keyconfigs.addon.keymaps.new(name="Node Editor", space_type="NODE_EDITOR")
-        kmi = km.keymap_items.new("node.auto_layout", "L", "PRESS", shift=True)
+        kmi = km.keymap_items.new("node.auto_layout", "V", "PRESS")
         addon_keymaps.append((km, kmi))
 
 

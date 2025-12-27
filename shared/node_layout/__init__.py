@@ -299,6 +299,7 @@ def _restore_all_frames(
 
     saved_frames must be sorted so parent frames come before children.
     If a frame with the same name already exists, reuse it instead of creating a new one.
+    Also adds reroute nodes to frames if they only connect nodes within that frame.
     """
     # Create or reuse frames in order (parents before children)
     frame_nodes: dict[str, bpy.types.Node] = {}
@@ -332,6 +333,130 @@ def _restore_all_frames(
             child_node = node_tree.nodes.get(child_name)
             if child_node is not None:
                 child_node.parent = frame
+
+    # Now handle reroutes: add them to frames if they ONLY connect nodes within that frame
+    _assign_reroutes_to_frames(node_tree, frame_nodes)
+
+
+def _get_node_frame(node: bpy.types.Node) -> bpy.types.Node | None:
+    """Get the immediate parent frame of a node, or None if not in a frame."""
+    return node.parent if node.parent is not None and node.parent.type == "FRAME" else None
+
+
+def _get_root_frame(node: bpy.types.Node) -> bpy.types.Node | None:
+    """Get the outermost frame containing a node, or None if not in a frame."""
+    frame = _get_node_frame(node)
+    while frame is not None and frame.parent is not None and frame.parent.type == "FRAME":
+        frame = frame.parent
+    return frame
+
+
+def _get_all_frames_containing(node: bpy.types.Node) -> set[bpy.types.Node]:
+    """Get all frames containing this node (from immediate parent up to root)."""
+    frames: set[bpy.types.Node] = set()
+    parent = node.parent
+    while parent is not None and parent.type == "FRAME":
+        frames.add(parent)
+        parent = parent.parent
+    return frames
+
+
+def _assign_reroutes_to_frames(
+    node_tree: bpy.types.NodeTree,
+    frame_nodes: dict[str, bpy.types.Node],
+) -> None:
+    """Assign reroute nodes to frames if all their connections are within that frame.
+
+    A reroute is added to a frame if:
+    1. All nodes it connects to (directly or through other reroutes) are in the same frame
+    2. This includes both upstream and downstream connections
+
+    For nested frames, reroutes are assigned to the innermost common frame.
+    """
+    if not frame_nodes:
+        return
+
+    # Build a reverse mapping: frame node -> frame name (for lookup)
+    frame_to_name = {frame: name for name, frame in frame_nodes.items()}
+
+    # Get all reroutes
+    reroutes = [n for n in node_tree.nodes if n.type == "REROUTE"]
+
+    for reroute in reroutes:
+        # Skip if already parented
+        if reroute.parent is not None:
+            continue
+
+        # Find all non-reroute nodes this reroute connects to (both directions)
+        connected_nodes = _get_connected_non_reroute_nodes(node_tree, reroute)
+
+        if not connected_nodes:
+            continue
+
+        # Find the common frame for all connected nodes
+        # Start with frames containing the first node
+        first_node = connected_nodes[0]
+        common_frames = _get_all_frames_containing(first_node)
+
+        # Intersect with frames of all other nodes
+        for node in connected_nodes[1:]:
+            node_frames = _get_all_frames_containing(node)
+            common_frames &= node_frames
+
+        if not common_frames:
+            # No common frame - don't parent the reroute
+            continue
+
+        # Find the innermost (most deeply nested) common frame
+        innermost_frame = None
+        max_depth = -1
+        for frame in common_frames:
+            depth = 0
+            parent = frame.parent
+            while parent is not None and parent.type == "FRAME":
+                depth += 1
+                parent = parent.parent
+            if depth > max_depth:
+                max_depth = depth
+                innermost_frame = frame
+
+        if innermost_frame is not None:
+            reroute.parent = innermost_frame
+
+
+def _get_connected_non_reroute_nodes(
+    node_tree: bpy.types.NodeTree,
+    reroute: bpy.types.Node,
+) -> list[bpy.types.Node]:
+    """Get all non-reroute nodes connected to a reroute (following reroute chains)."""
+    connected: list[bpy.types.Node] = []
+    visited_reroutes: set[bpy.types.Node] = set()
+
+    def trace_connections(current_reroute: bpy.types.Node) -> None:
+        if current_reroute in visited_reroutes:
+            return
+        visited_reroutes.add(current_reroute)
+
+        # Check upstream (input)
+        if current_reroute.inputs:
+            for link in current_reroute.inputs[0].links:
+                if link.from_node is not None:
+                    if link.from_node.type == "REROUTE":
+                        trace_connections(link.from_node)
+                    else:
+                        connected.append(link.from_node)
+
+        # Check downstream (output)
+        if current_reroute.outputs:
+            for link in current_reroute.outputs[0].links:
+                if link.to_node is not None:
+                    if link.to_node.type == "REROUTE":
+                        trace_connections(link.to_node)
+                    else:
+                        connected.append(link.to_node)
+
+    trace_connections(reroute)
+    return connected
 
 
 @dataclass
@@ -821,6 +946,7 @@ def layout_nodes_pcb_style(
     lane_width: float = 20.0,
     lane_gap: float = 50.0,
     nodes_to_layout: set[bpy.types.Node] | None = None,
+    anchor_nodes: set[bpy.types.Node] | None = None,
     sorting_method: str = "combined",
     use_gravity: bool = False,
     vertical_align: str = "CENTER",
@@ -829,7 +955,7 @@ def layout_nodes_pcb_style(
     collapse_adjacent: bool = True,
     snap_to_grid: bool = False,
     grid_size: float = 20.0,
-) -> None:
+) -> list[bpy.types.Node]:
     """Layout nodes in a PCB/FPGA-style grid with routed connections.
 
     Args:
@@ -839,6 +965,10 @@ def layout_nodes_pcb_style(
         lane_width: Width allocated per reroute lane in the diagonal
         lane_gap: Gap before and after the lane area
         nodes_to_layout: If provided, only layout these specific nodes. If None, layout all.
+        anchor_nodes: If provided, use these nodes for centroid calculation instead of all
+            nodes being laid out. Useful when expanding selection to upstream nodes but
+            wanting to anchor the result to the originally selected nodes.
+        sorting_method: How to compute column positions:
         sorting_method: How to compute column positions:
             - "combined": balanced using both input and output distance (default)
             - "output": prioritize distance from outputs
@@ -849,9 +979,12 @@ def layout_nodes_pcb_style(
         collapse_adjacent: Whether to collapse adjacent reroutes in neighboring columns (default: True)
         snap_to_grid: Whether to snap final positions to the editor grid (default: False)
         grid_size: Size of the grid to snap to (default: 20.0, Blender's default)
+    
+    Returns:
+        List of reroute nodes created during the layout operation.
     """
     if not node_tree.nodes:
-        return
+        return []
 
     # Step 0a: Remove existing reroutes and restore direct connections
     # This ensures repeated layouts produce consistent results
@@ -872,11 +1005,17 @@ def layout_nodes_pcb_style(
     if not columns:
         # Restore frames even if no columns to compute
         _restore_all_frames(node_tree, saved_frames)
-        return
+        return []
 
     # Compute centroid of nodes before layout
-    old_centroid_x = sum(n.location.x for n in columns) / len(columns)
-    old_centroid_y = sum(n.location.y for n in columns) / len(columns)
+    # Use anchor_nodes if provided, otherwise use all nodes being laid out
+    centroid_nodes = list(anchor_nodes) if anchor_nodes else list(columns.keys())
+    # Filter to only nodes actually in the layout
+    centroid_nodes = [n for n in centroid_nodes if n in columns]
+    if not centroid_nodes:
+        centroid_nodes = list(columns.keys())
+    old_centroid_x = sum(n.location.x for n in centroid_nodes) / len(centroid_nodes)
+    old_centroid_y = sum(n.location.y for n in centroid_nodes) / len(centroid_nodes)
 
     # Step 2: Build virtual grid with initial node placement
     grid = _build_virtual_grid(columns, vertical_align)
@@ -906,8 +1045,12 @@ def layout_nodes_pcb_style(
     all_laid_out = laid_out_nodes + created_reroutes
 
     if laid_out_nodes:
-        new_centroid_x = sum(n.location.x for n in laid_out_nodes) / len(laid_out_nodes)
-        new_centroid_y = sum(n.location.y for n in laid_out_nodes) / len(laid_out_nodes)
+        # Use the same nodes for new centroid as we used for old centroid
+        new_centroid_nodes = [n for n in centroid_nodes if n in columns]
+        if not new_centroid_nodes:
+            new_centroid_nodes = laid_out_nodes
+        new_centroid_x = sum(n.location.x for n in new_centroid_nodes) / len(new_centroid_nodes)
+        new_centroid_y = sum(n.location.y for n in new_centroid_nodes) / len(new_centroid_nodes)
 
         offset_x = old_centroid_x - new_centroid_x
         offset_y = old_centroid_y - new_centroid_y
@@ -924,6 +1067,8 @@ def layout_nodes_pcb_style(
 
     # Step 9: Restore frames and re-parent nodes
     _restore_all_frames(node_tree, saved_frames)
+
+    return created_reroutes
 
 
 def _build_virtual_grid(columns: dict[bpy.types.Node, int], vertical_align: str = "CENTER") -> VirtualGrid:
