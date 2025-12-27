@@ -942,7 +942,9 @@ def _build_virtual_grid(columns: dict[bpy.types.Node, int], vertical_align: str 
     max_h = max(len(nodes) for nodes in nodes_by_column.values()) if nodes_by_column else 0
 
     for col, nodes in nodes_by_column.items():
-        nodes.sort(key=lambda n: n.name)  # Consistent ordering
+        # Sort by original Y position (higher Y = top of screen, should come first)
+        # Use name as secondary sort key for consistent ordering when Y is equal
+        nodes.sort(key=lambda n: (-n.location.y, n.name))
         grid_x = max_col - col  # Flip so inputs are on left, outputs are on right
         h = len(nodes)
         if vertical_align == "TOP":
