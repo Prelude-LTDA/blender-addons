@@ -13,7 +13,7 @@ import bpy
 from .shared.node_layout import layout_nodes_pcb_style
 
 if TYPE_CHECKING:
-    from bpy.types import Context, Event, NodeTree, Node
+    from bpy.types import Context, Event, Node, NodeTree
 
 
 # =============================================================================
@@ -58,7 +58,7 @@ def _draw_modal_status_bar(self: bpy.types.Header, _context: bpy.types.Context) 
     sub.label(text=f"Snap Invert ({_status_state['grid_size']})")
     sub.label(text="", icon="EVENT_SHIFT")
     sub.label(text="", icon="EVENT_TAB")
-    sub.label(text=f"Snap Toggle",)
+    sub.label(text="Snap Toggle")
 
 
     # ── A: Vertical Alignment ──
@@ -107,7 +107,8 @@ def _enable_status_bar(context: bpy.types.Context) -> None:
         _status_state["active"] = True
         bpy.types.STATUSBAR_HT_header.prepend(_draw_modal_status_bar)
         # Set empty status text to hide default mouse hints
-        context.workspace.status_text_set(text=" ")
+        if context.workspace is not None:
+            context.workspace.status_text_set(text=" ")
 
 
 def _disable_status_bar(context: bpy.types.Context) -> None:
@@ -116,7 +117,8 @@ def _disable_status_bar(context: bpy.types.Context) -> None:
         _status_state["active"] = False
         bpy.types.STATUSBAR_HT_header.remove(_draw_modal_status_bar)
         # Clear the status text override
-        context.workspace.status_text_set(text=None)
+        if context.workspace is not None:
+            context.workspace.status_text_set(text=None)
 
 
 def _update_status_state(
@@ -163,6 +165,8 @@ def _get_upstream_nodes(node_tree: NodeTree, start_nodes: set[Node]) -> set[Node
             continue
         to_node = link.to_node
         from_node = link.from_node
+        if to_node is None or from_node is None:
+            continue
         if to_node not in input_sources:
             input_sources[to_node] = set()
         input_sources[to_node].add(from_node)
@@ -197,6 +201,8 @@ def _get_downstream_nodes(node_tree: NodeTree, start_nodes: set[Node]) -> set[No
             continue
         from_node = link.from_node
         to_node = link.to_node
+        if from_node is None or to_node is None:
+            continue
         if from_node not in output_targets:
             output_targets[from_node] = set()
         output_targets[from_node].add(to_node)
@@ -207,6 +213,8 @@ def _get_downstream_nodes(node_tree: NodeTree, start_nodes: set[Node]) -> set[No
         if not link.is_valid:
             continue
         to_node = link.to_node
+        if to_node is None:
+            continue
         connected_inputs[to_node] = connected_inputs.get(to_node, 0) + 1
 
     # BFS to find all downstream nodes
@@ -378,7 +386,7 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             and space.edit_tree is not None  # type: ignore[union-attr]
         )
 
-    def execute(self, context: Context) -> set[str]:
+    def execute(self, context: Context) -> set[str]:  # type: ignore[override]
         """Execute the layout operation."""
         space = context.space_data
         node_tree = space.edit_tree  # type: ignore[union-attr]
@@ -523,7 +531,7 @@ class NODE_OT_auto_layout(bpy.types.Operator):
 
         return {"FINISHED"}
 
-    def invoke(self, context: Context, event: Event) -> set[str]:
+    def invoke(self, context: Context, event: Event) -> set[str]:  # type: ignore[override]
         """Execute layout and optionally enter grab mode for subsets."""
         # Reset move offset for fresh invocation
         self.move_offset = (0.0, 0.0)
@@ -548,13 +556,15 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             self._current_offset = (0.0, 0.0)  # Track cumulative offset for incremental movement
 
             # Set move cursor
-            context.window.cursor_modal_set("SCROLL_XY")
+            if context.window is not None:
+                context.window.cursor_modal_set("SCROLL_XY")
 
             # Enable custom status bar with icons
             _enable_status_bar(context)
             self._update_status_text(context)
 
-            context.window_manager.modal_handler_add(self)
+            if context.window_manager is not None:
+                context.window_manager.modal_handler_add(self)
             return {"RUNNING_MODAL"}
 
         return {"FINISHED"}
@@ -572,12 +582,13 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             grid_size=self.grid_size,
         )
         # Trigger redraw of status bar
-        for area in context.screen.areas:
-            if area.type == "STATUSBAR":
-                area.tag_redraw()
-                break
+        if context.screen is not None:
+            for area in context.screen.areas:
+                if area.type == "STATUSBAR":
+                    area.tag_redraw()
+                    break
 
-    def modal(self, context: Context, event: Event) -> set[str]:
+    def modal(self, context: Context, event: Event) -> set[str]:  # type: ignore[override]
         """Handle modal grab mode."""
         if event.type == "MOUSEMOVE":
             # Convert mouse positions to view space (accounts for zoom/pan)
@@ -591,7 +602,7 @@ class NODE_OT_auto_layout(bpy.types.Operator):
                 node_dy = curr_vy - init_vy
 
                 # Account for pixel size (HiDPI/Retina displays)
-                pixel_size = context.preferences.system.pixel_size
+                pixel_size = context.preferences.system.pixel_size if context.preferences is not None else 1.0
                 node_dx /= pixel_size
                 node_dy /= pixel_size
             else:
@@ -630,7 +641,8 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             if hasattr(self, "_current_offset"):
                 self.move_offset = self._current_offset
             # Restore cursor and disable status bar
-            context.window.cursor_modal_restore()
+            if context.window is not None:
+                context.window.cursor_modal_restore()
             _disable_status_bar(context)
             # Report success now
             if hasattr(self, "_report_msg"):
@@ -647,7 +659,8 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             if context.area:
                 context.area.tag_redraw()
             # Restore cursor and disable status bar
-            context.window.cursor_modal_restore()
+            if context.window is not None:
+                context.window.cursor_modal_restore()
             _disable_status_bar(context)
             return {"CANCELLED"}
 
@@ -766,9 +779,9 @@ class NODE_OT_auto_layout(bpy.types.Operator):
 
 def _draw_context_menu(self: bpy.types.Menu, context: Context) -> None:  # noqa: ARG001
     """Draw the Auto Layout option in the node editor context menu."""
-    layout = self.layout
-    layout.separator()
-    layout.operator(NODE_OT_auto_layout.bl_idname, icon="SNAP_GRID")
+    layout = self.layout  # type: ignore[union-attr]
+    layout.separator()  # type: ignore[union-attr]
+    layout.operator(NODE_OT_auto_layout.bl_idname, icon="SNAP_GRID")  # type: ignore[union-attr]
 
 
 # List of classes to register

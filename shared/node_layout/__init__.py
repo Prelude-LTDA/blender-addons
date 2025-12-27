@@ -68,7 +68,7 @@ def _remove_all_reroutes(
         if from_node not in outgoing_links:
             outgoing_links[from_node] = []
         outgoing_links[from_node].append((to_node, link))
-    
+
     # First, collect all connections that need to be preserved
     # Map: (real_source_socket, destination_socket)
     connections_to_restore: list[tuple[bpy.types.NodeSocket, bpy.types.NodeSocket]] = []
@@ -103,7 +103,7 @@ def _remove_all_reroutes(
             continue
 
         # If filtering, only restore connections where BOTH endpoints are in our set
-        if nodes_to_layout is not None:
+        if nodes_to_layout is not None:  # noqa: SIM102
             if real_source.node not in nodes_to_layout or to_node not in nodes_to_layout:
                 continue
 
@@ -140,10 +140,7 @@ def _remove_all_reroutes(
                 while dest is not None and dest.type == "REROUTE":
                     # Find where this reroute outputs to (O(1) lookup)
                     next_links = outgoing_links.get(dest, [])
-                    if next_links:
-                        dest = next_links[0][0]
-                    else:
-                        dest = None
+                    dest = next_links[0][0] if next_links else None
                 # If final dest is outside our set, don't remove this reroute
                 if dest is not None and dest not in nodes_to_layout:
                     safe_to_remove = False
@@ -338,19 +335,6 @@ def _restore_all_frames(
     _assign_reroutes_to_frames(node_tree, frame_nodes)
 
 
-def _get_node_frame(node: bpy.types.Node) -> bpy.types.Node | None:
-    """Get the immediate parent frame of a node, or None if not in a frame."""
-    return node.parent if node.parent is not None and node.parent.type == "FRAME" else None
-
-
-def _get_root_frame(node: bpy.types.Node) -> bpy.types.Node | None:
-    """Get the outermost frame containing a node, or None if not in a frame."""
-    frame = _get_node_frame(node)
-    while frame is not None and frame.parent is not None and frame.parent.type == "FRAME":
-        frame = frame.parent
-    return frame
-
-
 def _get_all_frames_containing(node: bpy.types.Node) -> set[bpy.types.Node]:
     """Get all frames containing this node (from immediate parent up to root)."""
     frames: set[bpy.types.Node] = set()
@@ -375,9 +359,6 @@ def _assign_reroutes_to_frames(
     """
     if not frame_nodes:
         return
-
-    # Build a reverse mapping: frame node -> frame name (for lookup)
-    frame_to_name = {frame: name for name, frame in frame_nodes.items()}
 
     # Get all reroutes
     reroutes = [n for n in node_tree.nodes if n.type == "REROUTE"]
@@ -425,7 +406,7 @@ def _assign_reroutes_to_frames(
 
 
 def _get_connected_non_reroute_nodes(
-    node_tree: bpy.types.NodeTree,
+    _node_tree: bpy.types.NodeTree,
     reroute: bpy.types.Node,
 ) -> list[bpy.types.Node]:
     """Get all non-reroute nodes connected to a reroute (following reroute chains)."""
@@ -439,21 +420,25 @@ def _get_connected_non_reroute_nodes(
 
         # Check upstream (input)
         if current_reroute.inputs:
-            for link in current_reroute.inputs[0].links:
-                if link.from_node is not None:
-                    if link.from_node.type == "REROUTE":
-                        trace_connections(link.from_node)
-                    else:
-                        connected.append(link.from_node)
+            input_links = current_reroute.inputs[0].links
+            if input_links is not None:
+                for link in input_links:
+                    if link.from_node is not None:
+                        if link.from_node.type == "REROUTE":
+                            trace_connections(link.from_node)
+                        else:
+                            connected.append(link.from_node)
 
         # Check downstream (output)
         if current_reroute.outputs:
-            for link in current_reroute.outputs[0].links:
-                if link.to_node is not None:
-                    if link.to_node.type == "REROUTE":
-                        trace_connections(link.to_node)
-                    else:
-                        connected.append(link.to_node)
+            output_links = current_reroute.outputs[0].links
+            if output_links is not None:
+                for link in output_links:
+                    if link.to_node is not None:
+                        if link.to_node.type == "REROUTE":
+                            trace_connections(link.to_node)
+                        else:
+                            connected.append(link.to_node)
 
     trace_connections(reroute)
     return connected
@@ -619,7 +604,7 @@ def _build_link_adjacency(
     node_tree: bpy.types.NodeTree,
 ) -> tuple[dict[bpy.types.Node, list[bpy.types.Node]], dict[bpy.types.Node, list[bpy.types.Node]], set[bpy.types.Node]]:
     """Pre-build adjacency lists from links for O(1) lookups.
-    
+
     Returns:
         - outgoing: dict mapping node -> list of nodes it outputs to
         - incoming: dict mapping node -> list of nodes it receives from
@@ -628,7 +613,7 @@ def _build_link_adjacency(
     outgoing: dict[bpy.types.Node, list[bpy.types.Node]] = {}
     incoming: dict[bpy.types.Node, list[bpy.types.Node]] = {}
     has_outgoing: set[bpy.types.Node] = set()
-    
+
     for link in node_tree.links:
         if not link.is_valid:
             continue
@@ -636,17 +621,17 @@ def _build_link_adjacency(
         to_node = link.to_node
         if from_node is None or to_node is None:
             continue
-        
+
         has_outgoing.add(from_node)
-        
+
         if from_node not in outgoing:
             outgoing[from_node] = []
         outgoing[from_node].append(to_node)
-        
+
         if to_node not in incoming:
             incoming[to_node] = []
         incoming[to_node].append(from_node)
-    
+
     return outgoing, incoming, has_outgoing
 
 
@@ -659,17 +644,17 @@ def compute_node_depths(
     """Compute the depth of each node (distance from output nodes).
 
     Output nodes have depth 0, their inputs have depth 1, etc.
-    
+
     Args:
         node_tree: The node tree
         outgoing: Pre-built adjacency list (optional, built if not provided)
-        incoming: Pre-built adjacency list (optional, built if not provided)  
+        incoming: Pre-built adjacency list (optional, built if not provided)
         has_outgoing: Set of nodes with outgoing links (optional)
     """
     # Build adjacency if not provided
     if outgoing is None or incoming is None or has_outgoing is None:
         outgoing, incoming, has_outgoing = _build_link_adjacency(node_tree)
-    
+
     depths: dict[bpy.types.Node, int] = {}
 
     # Find output nodes (nodes with no output connections, or Group Output)
@@ -712,7 +697,7 @@ def compute_node_input_depths(
 
     Input nodes (Group Input, nodes with no incoming connections) have depth 0,
     nodes they connect to have depth 1, etc.
-    
+
     Args:
         node_tree: The node tree
         outgoing: Pre-built adjacency list (optional, built if not provided)
@@ -720,7 +705,7 @@ def compute_node_input_depths(
     # Build adjacency if not provided
     if outgoing is None:
         outgoing, _, _ = _build_link_adjacency(node_tree)
-    
+
     depths: dict[bpy.types.Node, int] = {}
 
     # Find input nodes (only Group Input)
@@ -896,7 +881,7 @@ def compute_node_columns(
     """
     # Build adjacency once, reuse for both depth computations
     outgoing, incoming, has_outgoing = _build_link_adjacency(node_tree)
-    
+
     output_depths = compute_node_depths(node_tree, outgoing, incoming, has_outgoing)
     input_depths = compute_node_input_depths(node_tree, outgoing)
 
@@ -979,7 +964,7 @@ def layout_nodes_pcb_style(
         collapse_adjacent: Whether to collapse adjacent reroutes in neighboring columns (default: True)
         snap_to_grid: Whether to snap final positions to the editor grid (default: False)
         grid_size: Size of the grid to snap to (default: 20.0, Blender's default)
-    
+
     Returns:
         List of reroute nodes created during the layout operation.
     """
@@ -1456,7 +1441,7 @@ def _optimize_routing_path(
             i = j + 1
         optimized = horiz_optimized
 
-    if collapse_adjacent:
+    if collapse_adjacent:  # noqa: SIM102
         # Rule 3: If after optimization, only one reroute remains at dest cell,
         # and source is at X-1 (adjacent column), we can remove it entirely
         if (

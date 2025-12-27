@@ -71,9 +71,9 @@ def _get_classes() -> Sequence[type]:
 # Menu draw function
 def draw_node_menu(self: bpy.types.Menu, context: bpy.types.Context) -> None:  # noqa: ARG001
     """Add Auto Layout to the Node menu."""
-    layout = self.layout
-    layout.separator()
-    layout.operator("node.auto_layout", icon="SNAP_GRID")
+    layout = self.layout  # type: ignore[union-attr]
+    layout.separator()  # type: ignore[union-attr]
+    layout.operator("node.auto_layout", icon="SNAP_GRID")  # type: ignore[union-attr]
 
 
 # Keymap storage
@@ -96,7 +96,7 @@ def register() -> None:
 
     # Register keyboard shortcut
     wm = bpy.context.window_manager
-    if wm.keyconfigs.addon is not None:
+    if wm is not None and wm.keyconfigs.addon is not None:
         km = wm.keyconfigs.addon.keymaps.new(name="Node Editor", space_type="NODE_EDITOR")
         kmi = km.keymap_items.new("node.auto_layout", "V", "PRESS")
         addon_keymaps.append((km, kmi))
