@@ -24,7 +24,42 @@ class NODE_OT_auto_layout(bpy.types.Operator):
     bl_description = "Arrange nodes in a clean PCB-style grid layout with organized connections"
     bl_options = {"REGISTER", "UNDO"}
 
-    # Layout parameters as operator properties
+    # =========================
+    # Column Assignment
+    # =========================
+
+    sorting_method: bpy.props.EnumProperty(
+        name="Column Assignment",
+        description="How to determine column positions",
+        items=[
+            ("combined", "Input & Output Distance", "Balance between input and output distance"),
+            ("output", "Output Distance", "Prioritize distance from outputs"),
+            ("input", "Input Distance", "Prioritize distance from inputs"),
+        ],
+        default="combined",
+    )  # type: ignore[valid-type]
+
+    use_gravity: bpy.props.BoolProperty(
+        name="Gravity",
+        description="Pull nodes closer together when gaps are large",
+        default=False,
+    )  # type: ignore[valid-type]
+
+    vertical_align: bpy.props.EnumProperty(
+        name="Vertical Alignment",
+        description="How to align nodes vertically within each column",
+        items=[
+            ("CENTER", "Center", "Center nodes vertically (default)"),
+            ("TOP", "Top", "Align nodes to the top of the grid"),
+            ("BOTTOM", "Bottom", "Align nodes to the bottom of the grid"),
+        ],
+        default="CENTER",
+    )  # type: ignore[valid-type]
+
+    # =========================
+    # Spacing
+    # =========================
+
     cell_width: bpy.props.FloatProperty(
         name="Cell Width",
         description="Width of each grid cell",
@@ -57,6 +92,46 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         max=200.0,
     )  # type: ignore[valid-type]
 
+    # =========================
+    # Reroute Optimization
+    # =========================
+
+    collapse_vertical: bpy.props.BoolProperty(
+        name="Collapse Vertical",
+        description="Collapse vertical runs of reroutes into a single reroute",
+        default=True,
+    )  # type: ignore[valid-type]
+
+    collapse_horizontal: bpy.props.BoolProperty(
+        name="Collapse Horizontal",
+        description="Collapse horizontal runs of 3+ reroutes, keeping only the first and last",
+        default=True,
+    )  # type: ignore[valid-type]
+
+    collapse_adjacent: bpy.props.BoolProperty(
+        name="Collapse Adjacent",
+        description="Remove single reroutes between adjacent columns",
+        default=True,
+    )  # type: ignore[valid-type]
+
+    # =========================
+    # Snapping
+    # =========================
+
+    snap_to_grid: bpy.props.BoolProperty(
+        name="Snap to Grid",
+        description="Snap final node positions to the editor grid",
+        default=False,
+    )  # type: ignore[valid-type]
+
+    grid_size: bpy.props.FloatProperty(
+        name="Grid Size",
+        description="Size of the grid to snap to (Blender's default is 20)",
+        default=20.0,
+        min=1.0,
+        max=100.0,
+    )  # type: ignore[valid-type]
+
     @classmethod
     def poll(cls, context: Context) -> bool:
         """Check if operator can run."""
@@ -83,13 +158,35 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             self.report({"WARNING"}, "Node tree is empty")
             return {"CANCELLED"}
 
-        # Check if we should only layout selected nodes
+        # Determine which nodes to layout
         selected_nodes = [n for n in node_tree.nodes if n.select and n.type not in ("FRAME", "REROUTE")]
-        selected_only = len(selected_nodes) > 1
+        
+        # If only frames are selected, layout their contents
+        selected_frames = [n for n in node_tree.nodes if n.select and n.type == "FRAME"]
+        if not selected_nodes and selected_frames:
+            # Get all children of selected frames (including nested frames)
+            frame_children: set[bpy.types.Node] = set()
+            for frame in selected_frames:
+                for node in node_tree.nodes:
+                    if node.type in ("FRAME", "REROUTE"):
+                        continue
+                    # Check if node is inside this frame (direct or nested)
+                    parent = node.parent
+                    while parent is not None:
+                        if parent == frame:
+                            frame_children.add(node)
+                            break
+                        parent = parent.parent
+            selected_nodes = list(frame_children)
+        
+        # Only use subset if we have more than 1 node to layout
+        nodes_to_layout: set[bpy.types.Node] | None = None
+        if len(selected_nodes) > 1:
+            nodes_to_layout = set(selected_nodes)
 
         # Count nodes for reporting
-        if selected_only:
-            node_count = len(selected_nodes)
+        if nodes_to_layout is not None:
+            node_count = len(nodes_to_layout)
         else:
             node_count = len([n for n in node_tree.nodes if n.type not in ("REROUTE", "FRAME")])
 
@@ -100,10 +197,18 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             cell_height=self.cell_height,
             lane_width=self.lane_width,
             lane_gap=self.lane_gap,
-            selected_only=selected_only,
+            nodes_to_layout=nodes_to_layout,
+            sorting_method=self.sorting_method,
+            use_gravity=self.use_gravity,
+            vertical_align=self.vertical_align,
+            collapse_vertical=self.collapse_vertical,
+            collapse_horizontal=self.collapse_horizontal,
+            collapse_adjacent=self.collapse_adjacent,
+            snap_to_grid=self.snap_to_grid,
+            grid_size=self.grid_size,
         )
 
-        if selected_only:
+        if nodes_to_layout is not None:
             self.report({"INFO"}, f"Arranged {node_count} selected nodes")
         else:
             self.report({"INFO"}, f"Arranged {node_count} nodes")
@@ -112,11 +217,28 @@ class NODE_OT_auto_layout(bpy.types.Operator):
     def invoke(self, context: Context, event: Event) -> set[str]:  # noqa: ARG002
         """Show options dialog before executing."""
         # Run directly without dialog for quick access
-        # Use F6 or operator panel to adjust settings after
+        # Press F9 or use View > Adjust Last Operation to tweak settings after
         return self.execute(context)
+
+
+def _draw_context_menu(self: bpy.types.Menu, context: Context) -> None:  # noqa: ARG001
+    """Draw the Auto Layout option in the node editor context menu."""
+    layout = self.layout
+    layout.separator()
+    layout.operator(NODE_OT_auto_layout.bl_idname, icon="SNAP_GRID")
 
 
 # List of classes to register
 classes: list[type] = [
     NODE_OT_auto_layout,
 ]
+
+
+def register_menus() -> None:
+    """Register context menu entries."""
+    bpy.types.NODE_MT_context_menu.append(_draw_context_menu)
+
+
+def unregister_menus() -> None:
+    """Unregister context menu entries."""
+    bpy.types.NODE_MT_context_menu.remove(_draw_context_menu)

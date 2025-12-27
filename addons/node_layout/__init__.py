@@ -73,7 +73,7 @@ def draw_node_menu(self: bpy.types.Menu, context: bpy.types.Context) -> None:  #
     """Add Auto Layout to the Node menu."""
     layout = self.layout
     layout.separator()
-    layout.operator("node.auto_layout", icon="NODETREE")
+    layout.operator("node.auto_layout", icon="SNAP_GRID")
 
 
 # Keymap storage
@@ -90,6 +90,10 @@ def register() -> None:
     # Add to Node Editor menus
     bpy.types.NODE_MT_node.append(draw_node_menu)
 
+    # Add to context menu (right-click)
+    from . import operators
+    operators.register_menus()
+
     # Register keyboard shortcut
     wm = bpy.context.window_manager
     if wm.keyconfigs.addon is not None:
@@ -104,6 +108,10 @@ def unregister() -> None:
     for km, kmi in addon_keymaps:
         km.keymap_items.remove(kmi)
     addon_keymaps.clear()
+
+    # Remove from context menu
+    from . import operators
+    operators.unregister_menus()
 
     # Remove from menus
     bpy.types.NODE_MT_node.remove(draw_node_menu)
