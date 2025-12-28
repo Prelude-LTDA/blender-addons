@@ -70,9 +70,12 @@ def _draw_modal_status_bar(self: bpy.types.Header, _context: bpy.types.Context) 
     sub.label(text=f"Align ({align_label})")
 
     # ── C: Column Assignment ──
-    method_label = {"combined": "In+Out", "output": "Output", "input": "Input"}.get(
-        str(_status_state["sorting_method"]), "In+Out"
-    )
+    method_label = {
+        "combined": "In+Out",
+        "output": "Output",
+        "input": "Input",
+        "position": "Orig. Pos",
+    }.get(str(_status_state["sorting_method"]), "In+Out")
     sub = row.row(align=True)
     sub.label(text="", icon="EVENT_C")
     sub.label(text=f"Column ({method_label})")
@@ -395,6 +398,11 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             ),
             ("output", "Output Distance", "Prioritize distance from outputs"),
             ("input", "Input Distance", "Prioritize distance from inputs"),
+            (
+                "position",
+                "Original Position",
+                "Use original X positions to determine columns",
+            ),
         ],
         default="combined",
     )  # type: ignore[valid-type]
@@ -540,6 +548,13 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             self.report({"WARNING"}, "Node tree is empty")
             return {"CANCELLED"}
 
+        # Capture original X positions BEFORE layout for "position" sorting method
+        # This is stored and reused during interactive adjustments
+        self._original_positions: dict[bpy.types.Node, float] = {}
+        for node in node_tree.nodes:
+            if node.type not in ("FRAME", "REROUTE"):
+                self._original_positions[node] = node.location.x
+
         # Determine which nodes to layout
         selected_nodes = [
             n
@@ -584,6 +599,7 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             snap_to_grid=self.snap_to_grid,
             grid_size=self.grid_size,
             respect_dimensions=self.reflow_tall,
+            original_positions=self._original_positions,
         )
 
         # Update selection based on what was laid out
@@ -800,13 +816,13 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         elif event.type == "G":
             self.use_gravity = not self.use_gravity
         elif event.type == "C":
-            methods = ["combined", "output", "input"]
+            methods = ["combined", "output", "input", "position"]
             current_idx = (
                 methods.index(self.sorting_method)
                 if self.sorting_method in methods
                 else 0
             )
-            self.sorting_method = methods[(current_idx + 1) % 3]
+            self.sorting_method = methods[(current_idx + 1) % 4]
         elif event.type == "R":
             self.reflow_tall = not self.reflow_tall
         else:
@@ -882,7 +898,7 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         # Get the nodes we're working with (excluding reroutes we created)
         nodes_to_layout = getattr(self, "_nodes_to_layout", None)
 
-        # Re-run layout
+        # Re-run layout (use stored original positions for "position" sorting)
         created_reroutes = layout_nodes_pcb_style(
             node_tree,
             cell_width=self.cell_width,
@@ -900,6 +916,7 @@ class NODE_OT_auto_layout(bpy.types.Operator):
             snap_to_grid=self.snap_to_grid,
             grid_size=self.grid_size,
             respect_dimensions=self.reflow_tall,
+            original_positions=getattr(self, "_original_positions", None),
         )
 
         # Update grab nodes

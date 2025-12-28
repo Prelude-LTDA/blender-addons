@@ -884,6 +884,8 @@ def compute_node_columns(
     nodes_to_layout: set[bpy.types.Node] | None = None,
     sorting_method: str = "combined",
     use_gravity: bool = False,
+    original_positions: dict[bpy.types.Node, float] | None = None,
+    column_width: float = 250.0,
 ) -> dict[bpy.types.Node, int]:
     """Compute column position for each node using both input and output distances.
 
@@ -898,6 +900,7 @@ def compute_node_columns(
             - "combined": output_depth - input_depth (default, balanced)
             - "output": distance from outputs only (outputs on right)
             - "input": distance from inputs only (inputs on left)
+            - "position": use original X positions divided by column_width
         use_gravity: Whether to pull nodes closer together in refinement
     """
     # Build adjacency once, reuse for both depth computations
@@ -923,19 +926,38 @@ def compute_node_columns(
             raw_positions[node] = float(
                 -in_d
             )  # Negate so higher input depth = more left
+        elif sorting_method == "position" and original_positions is not None:
+            # Use original X position - will be processed below
+            raw_positions[node] = original_positions.get(node, 0.0)
         else:  # "combined"
             raw_positions[node] = float(out_d - in_d)
 
-    # Build connection maps and refine with shaker-sort passes
-    outputs_to, inputs_from = _build_connection_maps(
-        node_tree, set(raw_positions.keys())
-    )
-    _refine_columns_shaker(
-        raw_positions,
-        outputs_to,
-        inputs_from,
-        use_gravity=use_gravity,
-    )
+    # For "position" method, convert X positions to column indices directly
+    if sorting_method == "position" and original_positions is not None:
+        # Find the leftmost (minimum X) position
+        if raw_positions:
+            min_x = min(raw_positions.values())
+            # Convert to column indices: (x - min_x) / column_width, rounded
+            # Higher X = more to the right = lower column number (outputs on right)
+            # So we negate to flip the order
+            for node in raw_positions:
+                relative_x = raw_positions[node] - min_x
+                col_index = round(relative_x / column_width) if column_width > 0 else 0
+                raw_positions[node] = float(-col_index)  # Negate so left = higher column
+
+        # Skip shaker refinement for position-based sorting
+        # (we want to preserve the original spatial arrangement)
+    else:
+        # Build connection maps and refine with shaker-sort passes
+        outputs_to, inputs_from = _build_connection_maps(
+            node_tree, set(raw_positions.keys())
+        )
+        _refine_columns_shaker(
+            raw_positions,
+            outputs_to,
+            inputs_from,
+            use_gravity=use_gravity,
+        )
 
     # Get unique position values and sort them
     unique_positions = sorted(set(raw_positions.values()))
@@ -968,6 +990,7 @@ def layout_nodes_pcb_style(
     snap_to_grid: bool = False,
     grid_size: float = 20.0,
     respect_dimensions: bool = True,
+    original_positions: dict[bpy.types.Node, float] | None = None,
 ) -> list[bpy.types.Node]:
     """Layout nodes in a PCB/FPGA-style grid with routed connections.
 
@@ -994,12 +1017,25 @@ def layout_nodes_pcb_style(
         respect_dimensions: If True, measure actual node heights and have tall nodes span
             multiple grid rows to prevent vertical overlapping (default: False).
             Note: Requires nodes to have been drawn at least once for dimensions to be available.
+        original_positions: Pre-captured X positions for "position" sorting method.
+            If None and sorting_method is "position", positions are captured at start of layout.
+            Pass this to preserve original positions across multiple layout calls.
 
     Returns:
         List of reroute nodes created during the layout operation.
     """
     if not node_tree.nodes:
         return []
+
+    # Capture original X positions BEFORE any modifications
+    # Used by "position" sorting method to preserve spatial arrangement
+    # If original_positions was passed in, use that instead (for re-layouts)
+    if original_positions is None:
+        original_positions = {}
+        for node in node_tree.nodes:
+            if node.type not in ("FRAME", "REROUTE"):
+                if nodes_to_layout is None or node in nodes_to_layout:
+                    original_positions[node] = node.location.x
 
     # Step 0a: Remove existing reroutes and restore direct connections
     # This ensures repeated layouts produce consistent results
@@ -1010,12 +1046,31 @@ def layout_nodes_pcb_style(
     saved_frames = _save_all_frames(node_tree, nodes_to_layout)
     _remove_all_frames(node_tree, nodes_to_layout)
 
+    # Compute column width for position-based sorting
+    # Use min(cell_width, max_node_width) so we don't produce fewer columns than needed
+    # (we can produce more columns if user chooses smaller cell_width, but not fewer)
+    ui_scale = 1.0
+    if bpy.context is not None and bpy.context.preferences is not None:
+        ui_scale = bpy.context.preferences.system.ui_scale
+    max_node_width = 0.0
+    for node in node_tree.nodes:
+        if node.type not in ("REROUTE", "FRAME"):
+            if nodes_to_layout is None or node in nodes_to_layout:
+                width = node.dimensions[0] / ui_scale
+                if width > max_node_width:
+                    max_node_width = width
+    if max_node_width <= 0:
+        max_node_width = 200.0  # Fallback if nodes not drawn yet
+    column_width = min(cell_width, max_node_width) + lane_gap
+
     # Step 1: Compute column positions using both input and output distances
     columns = compute_node_columns(
         node_tree,
         nodes_to_layout,
         sorting_method=sorting_method,
         use_gravity=use_gravity,
+        original_positions=original_positions,
+        column_width=column_width,
     )
     if not columns:
         # Restore frames even if no columns to compute
