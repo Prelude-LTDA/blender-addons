@@ -1,0 +1,298 @@
+"""
+Operators module for UV Map addon.
+
+Contains operators for adding UV Map modifier and inserting node groups.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import bpy
+
+from .constants import (
+    MAPPING_PLANAR,
+    MAPPING_TYPES,
+    MODIFIER_NAME,
+    SOCKET_MAPPING_TYPE,
+    UV_MAP_NODE_GROUP_PREFIX,
+)
+from .nodes import create_uv_map_node_group, is_uv_map_node_group
+
+if TYPE_CHECKING:
+    from bpy.stub_internal.rna_enums import OperatorReturnItems
+    from bpy.types import Context, Event
+
+
+class UVMAP_OT_add_modifier(bpy.types.Operator):
+    """Add a UV Map modifier to the selected object."""
+
+    bl_idname = "uv_map.add_modifier"
+    bl_label = "UV Map"
+    bl_description = "Add a UV Map modifier with procedural UV mapping node group"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: Context) -> bool:
+        """Check if the operator can be executed."""
+        obj = context.active_object
+        return obj is not None and obj.type == "MESH"
+
+    def execute(self, context: Context) -> set[OperatorReturnItems]:
+        """Execute the operator."""
+        obj = context.active_object
+        if obj is None:
+            self.report({"ERROR"}, "No active object")
+            return {"CANCELLED"}
+
+        # Create the UV Map node group
+        node_tree = create_uv_map_node_group()
+
+        # Add geometry nodes modifier
+        modifier = obj.modifiers.new(name=MODIFIER_NAME, type="NODES")
+        modifier.node_group = node_tree  # type: ignore[attr-defined]
+
+        self.report({"INFO"}, f"Added UV Map modifier to {obj.name}")
+        return {"FINISHED"}
+
+
+class UVMAP_OT_insert_node_group(bpy.types.Operator):
+    """Insert a UV Map node group into the current geometry nodes editor."""
+
+    bl_idname = "uv_map.insert_node_group"
+    bl_label = "UV Map"
+    bl_description = "Insert a UV Map node group for procedural UV mapping"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context: Context) -> bool:
+        """Check if the operator can be executed."""
+        space = context.space_data
+        if space is None or space.type != "NODE_EDITOR":
+            return False
+        # Check if we're in a geometry node tree
+        node_tree = getattr(space, "edit_tree", None)
+        if node_tree is None:
+            return False
+        return node_tree.type == "GEOMETRY"
+
+    def execute(self, context: Context) -> set[OperatorReturnItems]:
+        """Execute the operator."""
+        space = context.space_data
+        if space is None:
+            self.report({"ERROR"}, "No active space")
+            return {"CANCELLED"}
+
+        node_tree = getattr(space, "edit_tree", None)
+        if node_tree is None:
+            self.report({"ERROR"}, "No active node tree")
+            return {"CANCELLED"}
+
+        # Create the UV Map node group
+        uv_map_group = create_uv_map_node_group()
+
+        # Add a group node referencing it
+        group_node = node_tree.nodes.new("GeometryNodeGroup")
+        group_node.node_tree = uv_map_group  # type: ignore[attr-defined]
+        group_node.label = UV_MAP_NODE_GROUP_PREFIX
+
+        # Position at cursor location in node editor
+        cursor_location = getattr(space, "cursor_location", (0.0, 0.0))
+        group_node.location = cursor_location
+
+        # Select the new node
+        for node in node_tree.nodes:
+            node.select = False
+        group_node.select = True
+        node_tree.nodes.active = group_node
+
+        self.report({"INFO"}, "Inserted UV Map node group")
+        return {"FINISHED"}
+
+    def invoke(self, context: Context, event: Event) -> set[OperatorReturnItems]:
+        """Invoke the operator - update cursor position from mouse."""
+        space = context.space_data
+        if space is not None and hasattr(space, "cursor_location"):
+            # Convert mouse position to node editor space
+            region = context.region
+            if region is not None:
+                # Get the view2d to convert coordinates
+                view2d = region.view2d
+                if view2d is not None:
+                    x, y = view2d.region_to_view(
+                        event.mouse_region_x, event.mouse_region_y
+                    )
+                    space.cursor_location = (x, y)  # type: ignore[attr-defined]
+
+        return self.execute(context)
+
+
+class UVMAP_OT_select_uv_map_modifier(bpy.types.Operator):
+    """Select the UV Map node group in the modifier for overlay display."""
+
+    bl_idname = "uv_map.select_modifier"
+    bl_label = "Select UV Map Modifier"
+    bl_description = "Select the UV Map modifier's node group for overlay display"
+    bl_options = {"INTERNAL"}
+
+    modifier_name: bpy.props.StringProperty(  # type: ignore[valid-type]
+        name="Modifier Name",
+        description="Name of the modifier to select",
+        default="",
+    )
+
+    def execute(self, context: Context) -> set[OperatorReturnItems]:
+        """Execute the operator."""
+        obj = context.active_object
+        if obj is None:
+            return {"CANCELLED"}
+
+        modifier = obj.modifiers.get(self.modifier_name)
+        if modifier is None:
+            return {"CANCELLED"}
+
+        # Set as active modifier (this enables overlay display)
+        obj.modifiers.active = modifier
+        return {"FINISHED"}
+
+
+def get_active_uv_map_node_group(context: Context) -> bpy.types.NodeTree | None:
+    """Get the UV Map node group from the active modifier, if any.
+
+    Returns the node tree if:
+    - There's an active object
+    - The object has an active modifier
+    - The modifier is a geometry nodes modifier
+    - The node group is a UV Map node group created by this addon
+    """
+    obj = context.active_object
+    if obj is None:
+        return None
+
+    modifier = obj.modifiers.active
+    if modifier is None:
+        return None
+
+    if modifier.type != "NODES":
+        return None
+
+    node_tree = getattr(modifier, "node_group", None)
+    if node_tree is None:
+        return None
+
+    if not is_uv_map_node_group(node_tree):
+        return None
+
+    return node_tree
+
+
+def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
+    obj: bpy.types.Object,  # noqa: ARG001
+    modifier: bpy.types.Modifier,
+) -> dict[str, object] | None:
+    """Get the UV Map parameters from a modifier.
+
+    Returns a dictionary with:
+    - mapping_type: str
+    - position: tuple[float, float, float]
+    - rotation: tuple[float, float, float, float] (quaternion)
+    - size: tuple[float, float, float]
+    - u_tile, v_tile, w_tile: float
+    - u_flip, v_flip, w_flip: bool
+    - uv_map: str
+
+    Returns None if the modifier is not a valid UV Map modifier.
+    """
+    if modifier.type != "NODES":
+        return None
+
+    node_tree = getattr(modifier, "node_group", None)
+    if node_tree is None or not is_uv_map_node_group(node_tree):
+        return None
+
+    # Build socket identifier mapping
+    socket_ids: dict[str, str] = {}
+    for item in node_tree.interface.items_tree:  # type: ignore[union-attr]
+        if getattr(item, "item_type", None) != "SOCKET":
+            continue
+        if getattr(item, "in_out", None) != "INPUT":
+            continue
+        socket_ids[item.name] = item.identifier  # type: ignore[union-attr]
+
+    # Read values from modifier
+    params: dict[str, object] = {}
+
+    # Mapping type (menu) - Menu Switch returns integer index offset by 2
+    # (because the node has type selector and Menu input before the enum items)
+    mapping_type_id = socket_ids.get(SOCKET_MAPPING_TYPE)
+    if mapping_type_id:
+        mapping_value = modifier.get(mapping_type_id, 2)  # Default to first item (index 2)
+        if isinstance(mapping_value, int):
+            # Subtract 2 to get 0-based index into MAPPING_TYPES
+            adjusted_index = mapping_value - 2
+            if 0 <= adjusted_index < len(MAPPING_TYPES):
+                params["mapping_type"] = MAPPING_TYPES[adjusted_index][0]
+            else:
+                params["mapping_type"] = MAPPING_PLANAR
+        elif isinstance(mapping_value, str):
+            # Fallback if it's a string
+            params["mapping_type"] = mapping_value.upper()
+        else:
+            params["mapping_type"] = MAPPING_PLANAR
+
+    # Position
+    pos_id = socket_ids.get("Position")
+    if pos_id:
+        pos = modifier.get(pos_id)
+        if pos is not None and hasattr(pos, "__len__") and len(pos) >= 3:
+            pos_list = list(pos)
+            params["position"] = (float(pos_list[0]), float(pos_list[1]), float(pos_list[2]))
+        else:
+            params["position"] = (0.0, 0.0, 0.0)
+
+    # Rotation (stored as Euler or Quaternion depending on Blender version)
+    rot_id = socket_ids.get("Rotation")
+    if rot_id:
+        rot = modifier.get(rot_id)
+        if rot is not None and hasattr(rot, "__len__") and len(rot) >= 3:
+            rot_list = list(rot)
+            params["rotation"] = (float(rot_list[0]), float(rot_list[1]), float(rot_list[2]))
+        else:
+            params["rotation"] = (0.0, 0.0, 0.0)
+
+    # Size
+    size_id = socket_ids.get("Size")
+    if size_id:
+        size = modifier.get(size_id)
+        if size is not None and hasattr(size, "__len__") and len(size) >= 3:
+            size_list = list(size)
+            params["size"] = (float(size_list[0]), float(size_list[1]), float(size_list[2]))
+        else:
+            params["size"] = (1.0, 1.0, 1.0)
+
+    # Tiling
+    for tile_name in ["U Tile", "V Tile", "W Tile"]:
+        tile_id = socket_ids.get(tile_name)
+        if tile_id:
+            params[tile_name.lower().replace(" ", "_")] = modifier.get(tile_id, 1.0)
+
+    # Flip
+    for flip_name in ["U Flip", "V Flip", "W Flip"]:
+        flip_id = socket_ids.get(flip_name)
+        if flip_id:
+            params[flip_name.lower().replace(" ", "_")] = modifier.get(flip_id, False)
+
+    # UV Map name
+    uv_map_id = socket_ids.get("UV Map")
+    if uv_map_id:
+        params["uv_map"] = modifier.get(uv_map_id, "UVMap")
+
+    return params
+
+
+# Classes to register
+classes: list[type] = [
+    UVMAP_OT_add_modifier,
+    UVMAP_OT_insert_node_group,
+    UVMAP_OT_select_uv_map_modifier,
+]
