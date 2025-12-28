@@ -5,7 +5,7 @@ id = "voxel_terrain"
 version = "1.0.0"
 name = "Voxel Terrain"
 tagline = "Voxel-based terrain generation and editing tools"
-maintainer = "Your Name <your.email@example.com>"
+maintainer = "Marco Buono <marco@prelude.ltda>"
 
 # Extension type
 type = "add-on"
@@ -24,7 +24,7 @@ blender_version_min = "5.0.0"
 license = ["SPDX:GPL-3.0-or-later"]
 
 # Optional: copyright notice
-copyright = ["2025 Your Name"]
+copyright = ["2025 Marco Buono"]
 
 # Optional: list of supported platforms (omit for all platforms)
 # platforms = ["windows-x64", "macos-arm64", "linux-x64", "windows-arm64", "macos-x64"]

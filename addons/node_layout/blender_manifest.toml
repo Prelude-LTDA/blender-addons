@@ -5,7 +5,7 @@ id = "node_layout"
 version = "1.0.0"
 name = "Node Layout"
 tagline = "Automatically arrange nodes in a clean PCB-style layout"
-maintainer = "Your Name <your.email@example.com>"
+maintainer = "Marco Buono <marco@prelude.ltda>"
 
 # Extension type
 type = "add-on"
@@ -20,7 +20,7 @@ blender_version_min = "5.0.0"
 license = ["SPDX:GPL-3.0-or-later"]
 
 # Optional: copyright notice
-copyright = ["2025 Your Name"]
+copyright = ["2025 Marco Buono"]
 
 # Build settings
 [build]
