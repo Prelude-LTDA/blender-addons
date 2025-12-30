@@ -75,16 +75,42 @@ def _get_classes() -> Sequence[type]:
 
 
 def _show_reload_popup() -> None:
-    """Show a popup to confirm addon was reloaded."""
+    """Show a popup when addon is loaded/reloaded.
+
+    If UV Map node groups exist, offer to regenerate them.
+    """
     import bpy
 
-    def draw(self: object, context: object) -> None:  # noqa: ARG001
-        layout = self.layout  # type: ignore[attr-defined]
-        layout.label(text="UV Map addon reloaded!")
+    from .nodes import get_uv_map_node_groups
 
-    wm = bpy.context.window_manager
-    if wm is not None:
-        wm.popup_menu(draw, title="Reload Success", icon="INFO")
+    existing_groups = get_uv_map_node_groups()
+
+    if existing_groups:
+        # Addon was reloaded and there are existing node groups
+
+        def draw(self: object, context: object) -> None:  # noqa: ARG001
+            layout = self.layout  # type: ignore[attr-defined]
+            layout.label(text=f"Found {len(existing_groups)} UV Map node group(s).")
+            layout.label(text="Regenerate to apply code changes?")
+            layout.separator()
+            layout.operator(
+                "uv_map.regenerate_node_groups",
+                text="Regenerate Node Groups",
+                icon="FILE_REFRESH",
+            )
+
+        wm = bpy.context.window_manager
+        if wm is not None:
+            wm.popup_menu(draw, title="UV Map Reloaded", icon="INFO")
+    else:
+        # First time load, no existing groups
+        def draw(self: object, context: object) -> None:  # noqa: ARG001
+            layout = self.layout  # type: ignore[attr-defined]
+            layout.label(text="UV Map addon loaded!")
+
+        wm = bpy.context.window_manager
+        if wm is not None:
+            wm.popup_menu(draw, title="UV Map", icon="INFO")
 
 
 def register() -> None:

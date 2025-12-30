@@ -14,13 +14,18 @@ UV_MAP_NODE_GROUP_TAG = "uv_map.generated"
 MAPPING_PLANAR = "PLANAR"
 MAPPING_CYLINDRICAL = "CYLINDRICAL"
 MAPPING_SPHERICAL = "SPHERICAL"
+MAPPING_SHRINK_WRAP = "SHRINK_WRAP"
 MAPPING_BOX = "BOX"
 
 # Mapping type display names
+MAPPING_CYLINDRICAL_CAPPED = "CYLINDRICAL_CAPPED"
+
 MAPPING_TYPES = [
     (MAPPING_PLANAR, "Planar", "Project UVs from a flat plane"),
     (MAPPING_CYLINDRICAL, "Cylindrical", "Project UVs from a cylinder"),
+    (MAPPING_CYLINDRICAL_CAPPED, "Cylindrical (Capped)", "Project UVs from a cylinder with planar caps"),
     (MAPPING_SPHERICAL, "Spherical", "Project UVs from a sphere"),
+    (MAPPING_SHRINK_WRAP, "Shrink Wrap", "Project UVs with a single pole (azimuthal)"),
     (MAPPING_BOX, "Box", "Project UVs from a box (tri-planar)"),
 ]
 
@@ -42,10 +47,11 @@ SOCKET_ROTATION = "Rotation"
 SOCKET_SIZE = "Size"
 SOCKET_U_TILE = "U Tile"
 SOCKET_V_TILE = "V Tile"
-SOCKET_W_TILE = "W Tile"
+SOCKET_U_OFFSET = "U Offset"
+SOCKET_V_OFFSET = "V Offset"
+SOCKET_UV_ROTATION = "UV Rotation"
 SOCKET_U_FLIP = "U Flip"
 SOCKET_V_FLIP = "V Flip"
-SOCKET_W_FLIP = "W Flip"
 SOCKET_UV_MAP = "UV Map"
 
 # Modifier name

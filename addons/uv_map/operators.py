@@ -16,8 +16,14 @@ from .constants import (
     MODIFIER_NAME,
     SOCKET_MAPPING_TYPE,
     UV_MAP_NODE_GROUP_PREFIX,
+    UV_MAP_NODE_GROUP_TAG,
 )
-from .nodes import create_uv_map_node_group, is_uv_map_node_group
+from .nodes import _SUB_GROUP_SUFFIXES
+from .nodes import (
+    create_uv_map_node_group,
+    is_uv_map_node_group,
+    regenerate_uv_map_node_group,
+)
 
 if TYPE_CHECKING:
     from bpy.stub_internal.rna_enums import OperatorReturnItems
@@ -156,6 +162,52 @@ class UVMAP_OT_select_uv_map_modifier(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class UVMAP_OT_regenerate_node_groups(bpy.types.Operator):
+    """Regenerate all UV Map node groups.
+
+    This deletes and recreates the internal helper groups (Planar, Cylindrical,
+    Spherical, Box) and regenerates all main UV Map node groups in place.
+    Useful after code changes during development.
+    """
+
+    bl_idname = "uv_map.regenerate_node_groups"
+    bl_label = "Regenerate UV Map Node Groups"
+    bl_description = (
+        "Regenerate all UV Map node groups (updates all existing UV Map setups)"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context: Context) -> set[OperatorReturnItems]:
+        """Execute the operator."""
+        # Helper group names (using constant from nodes.py)
+        helper_names = [
+            f"{UV_MAP_NODE_GROUP_PREFIX}{suffix}" for suffix in _SUB_GROUP_SUFFIXES
+        ]
+
+        # Find all main UV Map node groups before we delete helpers
+        main_groups: list[bpy.types.NodeTree] = [
+            ng for ng in bpy.data.node_groups if ng.get(UV_MAP_NODE_GROUP_TAG, False)
+        ]
+
+        # Delete old helper groups
+        deleted_count = 0
+        for name in helper_names:
+            if name in bpy.data.node_groups:
+                bpy.data.node_groups.remove(bpy.data.node_groups[name])
+                deleted_count += 1
+
+        # Regenerate all main UV Map node groups in place
+        # This will also recreate the helper groups on first use
+        for main_group in main_groups:
+            regenerate_uv_map_node_group(main_group)
+
+        self.report(
+            {"INFO"},
+            f"Regenerated {len(main_groups)} UV Map node groups",
+        )
+        return {"FINISHED"}
+
+
 def get_active_uv_map_node_group(context: Context) -> bpy.types.NodeTree | None:
     """Get the UV Map node group from the active modifier, if any.
 
@@ -197,8 +249,8 @@ def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
     - position: tuple[float, float, float]
     - rotation: tuple[float, float, float, float] (quaternion)
     - size: tuple[float, float, float]
-    - u_tile, v_tile, w_tile: float
-    - u_flip, v_flip, w_flip: bool
+    - u_tile, v_tile: float
+    - u_flip, v_flip: bool
     - uv_map: str
 
     Returns None if the modifier is not a valid UV Map modifier.
@@ -271,13 +323,13 @@ def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
             params["size"] = (1.0, 1.0, 1.0)
 
     # Tiling
-    for tile_name in ["U Tile", "V Tile", "W Tile"]:
+    for tile_name in ["U Tile", "V Tile"]:
         tile_id = socket_ids.get(tile_name)
         if tile_id:
             params[tile_name.lower().replace(" ", "_")] = modifier.get(tile_id, 1.0)
 
     # Flip
-    for flip_name in ["U Flip", "V Flip", "W Flip"]:
+    for flip_name in ["U Flip", "V Flip"]:
         flip_id = socket_ids.get(flip_name)
         if flip_id:
             params[flip_name.lower().replace(" ", "_")] = modifier.get(flip_id, False)
@@ -295,4 +347,5 @@ classes: list[type] = [
     UVMAP_OT_add_modifier,
     UVMAP_OT_insert_node_group,
     UVMAP_OT_select_uv_map_modifier,
+    UVMAP_OT_regenerate_node_groups,
 ]

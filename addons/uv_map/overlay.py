@@ -17,7 +17,9 @@ from mathutils import Euler, Matrix, Vector
 from .constants import (
     MAPPING_BOX,
     MAPPING_CYLINDRICAL,
+    MAPPING_CYLINDRICAL_CAPPED,
     MAPPING_PLANAR,
+    MAPPING_SHRINK_WRAP,
     MAPPING_SPHERICAL,
     OVERLAY_COLOR,
     OVERLAY_LINE_WIDTH,
@@ -191,14 +193,16 @@ def _generate_cylinder_vertices(
     return vertices
 
 
-def _generate_sphere_vertices(
+def _generate_cylinder_capped_vertices(
     position: tuple[float, float, float],
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
     segments: int = 32,
-    rings: int = 8,
 ) -> list[tuple[float, float, float]]:
-    """Generate vertices for a sphere wireframe."""
+    """Generate vertices for a capped cylinder wireframe.
+
+    Same as cylinder but with X marks on the top and bottom caps.
+    """
     pos_vec = Vector(position)
     rot_euler = Euler(rotation, "XYZ")
     scale_vec = Vector(size)
@@ -209,9 +213,109 @@ def _generate_sphere_vertices(
 
     vertices: list[tuple[float, float, float]] = []
 
-    # Generate latitude circles
-    for ring in range(1, rings):
-        phi = (ring / rings) * math.pi  # 0 to pi
+    # Generate circle at bottom (z = -1.0)
+    for i in range(segments):
+        angle1 = (i / segments) * 2.0 * math.pi
+        angle2 = ((i + 1) / segments) * 2.0 * math.pi
+
+        x1, y1 = 1.0 * math.cos(angle1), 1.0 * math.sin(angle1)
+        x2, y2 = 1.0 * math.cos(angle2), 1.0 * math.sin(angle2)
+
+        for x, y in [(x1, y1), (x2, y2)]:
+            point = Vector((x, y, -1.0))
+            transformed = transform @ point
+            vertices.append((transformed.x, transformed.y, transformed.z))
+
+    # Generate circle at top (z = 1.0)
+    for i in range(segments):
+        angle1 = (i / segments) * 2.0 * math.pi
+        angle2 = ((i + 1) / segments) * 2.0 * math.pi
+
+        x1, y1 = 1.0 * math.cos(angle1), 1.0 * math.sin(angle1)
+        x2, y2 = 1.0 * math.cos(angle2), 1.0 * math.sin(angle2)
+
+        for x, y in [(x1, y1), (x2, y2)]:
+            point = Vector((x, y, 1.0))
+            transformed = transform @ point
+            vertices.append((transformed.x, transformed.y, transformed.z))
+
+    # Generate vertical lines (4 evenly spaced)
+    for i in range(4):
+        angle = (i / 4) * 2.0 * math.pi
+        x, y = 1.0 * math.cos(angle), 1.0 * math.sin(angle)
+
+        # Bottom point
+        point_bottom = Vector((x, y, -1.0))
+        transformed_bottom = transform @ point_bottom
+        vertices.append(
+            (transformed_bottom.x, transformed_bottom.y, transformed_bottom.z)
+        )
+
+        # Top point
+        point_top = Vector((x, y, 1.0))
+        transformed_top = transform @ point_top
+        vertices.append((transformed_top.x, transformed_top.y, transformed_top.z))
+
+    # Add X marks on caps to indicate planar mapping
+    # Points are on the unit circle at 45° angles (inscribed in the circle)
+    sqrt2_inv = 1.0 / math.sqrt(2.0)  # ≈ 0.707
+
+    # Bottom cap X (inscribed in circle)
+    for p1, p2 in [
+        ((-sqrt2_inv, -sqrt2_inv), (sqrt2_inv, sqrt2_inv)),
+        ((-sqrt2_inv, sqrt2_inv), (sqrt2_inv, -sqrt2_inv)),
+    ]:
+        point1 = Vector((p1[0], p1[1], -1.0))
+        point2 = Vector((p2[0], p2[1], -1.0))
+        t1 = transform @ point1
+        t2 = transform @ point2
+        vertices.append((t1.x, t1.y, t1.z))
+        vertices.append((t2.x, t2.y, t2.z))
+
+    # Top cap X (inscribed in circle)
+    for p1, p2 in [
+        ((-sqrt2_inv, -sqrt2_inv), (sqrt2_inv, sqrt2_inv)),
+        ((-sqrt2_inv, sqrt2_inv), (sqrt2_inv, -sqrt2_inv)),
+    ]:
+        point1 = Vector((p1[0], p1[1], 1.0))
+        point2 = Vector((p2[0], p2[1], 1.0))
+        t1 = transform @ point1
+        t2 = transform @ point2
+        vertices.append((t1.x, t1.y, t1.z))
+        vertices.append((t2.x, t2.y, t2.z))
+
+    return vertices
+
+
+def _generate_sphere_vertices(
+    position: tuple[float, float, float],
+    rotation: tuple[float, float, float],
+    size: tuple[float, float, float],
+    segments: int = 32,
+    drawn_rings: int = 8,
+    smooth_rings: int = 32,
+) -> list[tuple[float, float, float]]:
+    """Generate vertices for a sphere wireframe.
+
+    Args:
+        segments: Number of segments for each circle
+        drawn_rings: Number of latitude circles to actually draw
+        smooth_rings: Number of steps for longitude lines (higher = smoother)
+    """
+    pos_vec = Vector(position)
+    rot_euler = Euler(rotation, "XYZ")
+    scale_vec = Vector(size)
+
+    # Build full TRS matrix
+    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    transform = Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+
+    vertices: list[tuple[float, float, float]] = []
+
+    # Generate latitude circles (only every Nth ring, based on ratio)
+    ring_step = max(1, smooth_rings // drawn_rings)
+    for ring in range(ring_step, smooth_rings, ring_step):
+        phi = (ring / smooth_rings) * math.pi  # 0 to pi
         z = 1.0 * math.cos(phi)
         radius = 1.0 * math.sin(phi)
 
@@ -227,13 +331,13 @@ def _generate_sphere_vertices(
                 transformed = transform @ point
                 vertices.append((transformed.x, transformed.y, transformed.z))
 
-    # Generate longitude lines (4 evenly spaced)
+    # Generate longitude lines (4 evenly spaced) with smooth_rings steps
     for i in range(4):
         theta = (i / 4) * 2.0 * math.pi
 
-        for ring in range(rings):
-            phi1 = (ring / rings) * math.pi
-            phi2 = ((ring + 1) / rings) * math.pi
+        for ring in range(smooth_rings):
+            phi1 = (ring / smooth_rings) * math.pi
+            phi2 = ((ring + 1) / smooth_rings) * math.pi
 
             for phi in [phi1, phi2]:
                 x = 1.0 * math.sin(phi) * math.cos(theta)
@@ -243,6 +347,132 @@ def _generate_sphere_vertices(
                 point = Vector((x, y, z))
                 transformed = transform @ point
                 vertices.append((transformed.x, transformed.y, transformed.z))
+
+    return vertices
+
+
+def _generate_shrink_wrap_vertices(
+    position: tuple[float, float, float],
+    rotation: tuple[float, float, float],
+    size: tuple[float, float, float],
+    grid_lines: int = 8,
+    segments_per_line: int = 32,
+) -> list[tuple[float, float, float]]:
+    """Generate vertices for shrink wrap (azimuthal equidistant) wireframe.
+
+    Shows a UV grid projected onto the sphere using the inverse azimuthal
+    equidistant projection. This visualizes what a regular checkerboard
+    pattern looks like when mapped - lines that are straight in UV space
+    become curves that all meet at the -Z pole.
+
+    Inverse projection formula:
+      dx = u - 0.5, dy = v - 0.5
+      r = sqrt(dx² + dy²)
+      phi = atan2(dy, dx)
+      theta = r * π
+      x = sin(theta) * cos(phi)
+      y = sin(theta) * sin(phi)
+      z = cos(theta)
+
+    Lines are extended beyond [0,1] UV range to reach r=1 (the -Z pole).
+    """
+    pos_vec = Vector(position)
+    rot_euler = Euler(rotation, "XYZ")
+    scale_vec = Vector(size)
+
+    # Build full TRS matrix
+    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    transform = Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+
+    vertices: list[tuple[float, float, float]] = []
+
+    def uv_to_sphere(u: float, v: float) -> Vector:
+        """Inverse azimuthal equidistant projection from UV to sphere."""
+        dx = u - 0.5
+        dy = v - 0.5
+        r = math.sqrt(dx * dx + dy * dy)
+
+        if r < 1e-6:
+            # At the center (top pole)
+            return Vector((0.0, 0.0, 1.0))
+
+        # Clamp r to 1.0 (the bottom pole)
+        if r > 1.0:
+            r = 1.0
+            scale = 1.0 / math.sqrt(dx * dx + dy * dy)
+            dx *= scale
+            dy *= scale
+
+        phi = math.atan2(dy, dx)
+        theta = r * math.pi  # r goes from 0 to 1, theta from 0 to π
+
+        x = math.sin(theta) * math.cos(phi)
+        y = math.sin(theta) * math.sin(phi)
+        z = math.cos(theta)
+
+        return Vector((x, y, z))
+
+    # Generate vertical lines (constant U) in UV space
+    # Extend v range to reach r=1 (bottom pole)
+    for i in range(grid_lines + 1):
+        u = i / grid_lines  # 0 to 1
+        dx = u - 0.5
+
+        # Calculate v range to reach r=1
+        # r² = dx² + dy² = 1, so dy² = 1 - dx²
+        if abs(dx) < 1.0:
+            dy_max = math.sqrt(1.0 - dx * dx)
+            v_min = 0.5 - dy_max
+            v_max = 0.5 + dy_max
+        else:
+            # dx >= 1, line doesn't exist in valid projection
+            continue
+
+        for j in range(segments_per_line):
+            t1 = j / segments_per_line
+            t2 = (j + 1) / segments_per_line
+            v1 = v_min + t1 * (v_max - v_min)
+            v2 = v_min + t2 * (v_max - v_min)
+
+            p1 = uv_to_sphere(u, v1)
+            p2 = uv_to_sphere(u, v2)
+
+            t1_vec = transform @ p1
+            t2_vec = transform @ p2
+
+            vertices.append((t1_vec.x, t1_vec.y, t1_vec.z))
+            vertices.append((t2_vec.x, t2_vec.y, t2_vec.z))
+
+    # Generate horizontal lines (constant V) in UV space
+    # Extend u range to reach r=1 (bottom pole)
+    for j in range(grid_lines + 1):
+        v = j / grid_lines  # 0 to 1
+        dy = v - 0.5
+
+        # Calculate u range to reach r=1
+        # r² = dx² + dy² = 1, so dx² = 1 - dy²
+        if abs(dy) < 1.0:
+            dx_max = math.sqrt(1.0 - dy * dy)
+            u_min = 0.5 - dx_max
+            u_max = 0.5 + dx_max
+        else:
+            # dy >= 1, line doesn't exist in valid projection
+            continue
+
+        for i in range(segments_per_line):
+            t1 = i / segments_per_line
+            t2 = (i + 1) / segments_per_line
+            u1 = u_min + t1 * (u_max - u_min)
+            u2 = u_min + t2 * (u_max - u_min)
+
+            p1 = uv_to_sphere(u1, v)
+            p2 = uv_to_sphere(u2, v)
+
+            t1_vec = transform @ p1
+            t2_vec = transform @ p2
+
+            vertices.append((t1_vec.x, t1_vec.y, t1_vec.z))
+            vertices.append((t2_vec.x, t2_vec.y, t2_vec.z))
 
     return vertices
 
@@ -338,8 +568,21 @@ def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
             combined_rotation,
             world_size,
         )
+    elif mapping_type == MAPPING_CYLINDRICAL_CAPPED:
+        vertices = _generate_cylinder_capped_vertices(
+            (world_position.x, world_position.y, world_position.z),
+            combined_rotation,
+            world_size,
+        )
     elif mapping_type == MAPPING_SPHERICAL:
         vertices = _generate_sphere_vertices(
+            (world_position.x, world_position.y, world_position.z),
+            combined_rotation,
+            world_size,
+        )
+    elif mapping_type == MAPPING_SHRINK_WRAP:
+        # Shrink wrap uses azimuthal grid overlay to show single-pole projection
+        vertices = _generate_shrink_wrap_vertices(
             (world_position.x, world_position.y, world_position.z),
             combined_rotation,
             world_size,
