@@ -18,8 +18,8 @@ from .constants import (
     UV_MAP_NODE_GROUP_PREFIX,
     UV_MAP_NODE_GROUP_TAG,
 )
-from .nodes import _SUB_GROUP_SUFFIXES
 from .nodes import (
+    _SUB_GROUP_SUFFIXES,
     create_uv_map_node_group,
     is_uv_map_node_group,
     regenerate_uv_map_node_group,
@@ -70,6 +70,12 @@ class UVMAP_OT_insert_node_group(bpy.types.Operator):
     bl_description = "Insert a UV Map node group for procedural UV mapping"
     bl_options = {"REGISTER", "UNDO"}
 
+    use_transform: bpy.props.BoolProperty(  # type: ignore[valid-type]
+        name="Use Transform",
+        description="Start transform operator after inserting the node",
+        default=True,
+    )
+
     @classmethod
     def poll(cls, context: Context) -> bool:
         """Check if the operator can be executed."""
@@ -112,23 +118,33 @@ class UVMAP_OT_insert_node_group(bpy.types.Operator):
         group_node.select = True
         node_tree.nodes.active = group_node
 
-        self.report({"INFO"}, "Inserted UV Map node group")
+        # Start transform if requested (enables "drop mode")
+        if self.use_transform:
+            bpy.ops.node.translate_attach_remove_on_cancel("INVOKE_DEFAULT")
+
         return {"FINISHED"}
 
     def invoke(self, context: Context, event: Event) -> set[OperatorReturnItems]:
         """Invoke the operator - update cursor position from mouse."""
         space = context.space_data
-        if space is not None and hasattr(space, "cursor_location"):
-            # Convert mouse position to node editor space
+        if space is not None:
             region = context.region
             if region is not None:
-                # Get the view2d to convert coordinates
                 view2d = region.view2d
                 if view2d is not None:
-                    x, y = view2d.region_to_view(
+                    # Convert mouse region coords to node editor view coords
+                    view_x, view_y = view2d.region_to_view(
                         event.mouse_region_x, event.mouse_region_y
                     )
-                    space.cursor_location = (x, y)  # type: ignore[attr-defined]
+                    # Scale by UI scale factor (matches Blender's internal behavior)
+                    prefs = context.preferences
+                    if prefs is not None:
+                        ui_scale = prefs.system.ui_scale
+                        view_x /= ui_scale
+                        view_y /= ui_scale
+                    # Store in cursor_location for execute() to use
+                    if hasattr(space, "cursor_location"):
+                        space.cursor_location = (view_x, view_y)  # type: ignore[attr-defined]
 
         return self.execute(context)
 
@@ -333,6 +349,16 @@ def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
         flip_id = socket_ids.get(flip_name)
         if flip_id:
             params[flip_name.lower().replace(" ", "_")] = modifier.get(flip_id, False)
+
+    # Cap (for cylindrical mapping)
+    cap_id = socket_ids.get("Cap")
+    if cap_id:
+        params["cap"] = modifier.get(cap_id, False)
+
+    # Normal-based (for cylindrical, spherical, and shrink wrap mappings)
+    normal_based_id = socket_ids.get("Normal-based")
+    if normal_based_id:
+        params["normal_based"] = modifier.get(normal_based_id, False)
 
     # UV Map name
     uv_map_id = socket_ids.get("UV Map")

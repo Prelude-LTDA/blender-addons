@@ -15,12 +15,17 @@ from .constants import (
     DEFAULT_POSITION,
     DEFAULT_SIZE,
     DEFAULT_TILE,
+    GIZMO_TYPES,
     MAPPING_TYPES,
+    SOCKET_CAP,
     SOCKET_GEOMETRY,
     SOCKET_MAPPING_TYPE,
+    SOCKET_NORMAL_BASED,
     SOCKET_POSITION,
     SOCKET_ROTATION,
+    SOCKET_SHOW_GIZMO,
     SOCKET_SIZE,
+    SOCKET_SMOOTH_NORMALS,
     SOCKET_U_FLIP,
     SOCKET_U_OFFSET,
     SOCKET_U_TILE,
@@ -42,6 +47,10 @@ _SUB_GROUP_SUFFIXES = [
     " - Spherical",
     " - Shrink Wrap",
     " - Box",
+    " - Cylindrical Normal",
+    " - Cylindrical Capped Normal",
+    " - Spherical Normal",
+    " - Shrink Wrap Normal",
 ]
 
 
@@ -64,6 +73,14 @@ def _create_main_interface(node_tree: bpy.types.NodeTree) -> None:
         in_out="INPUT",
     )
 
+    # UV Map attribute name (first for easy access)
+    uv_map_socket = interface.new_socket(
+        name=SOCKET_UV_MAP,
+        socket_type="NodeSocketString",
+        in_out="INPUT",
+    )
+    uv_map_socket.default_value = "UVMap"  # type: ignore[attr-defined]
+
     # Mapping type menu
     # Note: The default_value for NodeSocketMenu must be set after the Menu Switch
     # node is created and its enum items are defined. See _set_mapping_type_default().
@@ -73,13 +90,38 @@ def _create_main_interface(node_tree: bpy.types.NodeTree) -> None:
         in_out="INPUT",
     )
 
-    # UV Map attribute name (placed near top for easy access)
-    uv_map_socket = interface.new_socket(
-        name=SOCKET_UV_MAP,
-        socket_type="NodeSocketString",
+    # Cap option (for cylindrical mapping)
+    # When enabled, uses planar caps at top and bottom of cylinder
+    interface.new_socket(
+        name=SOCKET_CAP,
+        socket_type="NodeSocketBool",
         in_out="INPUT",
     )
-    uv_map_socket.default_value = "UVMap"  # type: ignore[attr-defined]
+
+    # Normal-based option (for cylindrical, spherical, and shrink wrap mappings)
+    # When enabled, uses normal direction instead of position for UV mapping
+    interface.new_socket(
+        name=SOCKET_NORMAL_BASED,
+        socket_type="NodeSocketBool",
+        in_out="INPUT",
+    )
+
+    # Smooth Normals option (for normal-based mappings)
+    # When enabled, computes smooth vertex normals even on flat-shaded geometry
+    interface.new_socket(
+        name=SOCKET_SMOOTH_NORMALS,
+        socket_type="NodeSocketBool",
+        in_out="INPUT",
+    )
+
+    # Gizmo selection menu
+    # Note: The default_value for NodeSocketMenu must be set after the Menu Switch
+    # node is created and its enum items are defined. See _set_gizmo_default().
+    interface.new_socket(
+        name=SOCKET_SHOW_GIZMO,
+        socket_type="NodeSocketMenu",
+        in_out="INPUT",
+    )
 
     # Transform inputs
     pos_socket = interface.new_socket(
@@ -177,6 +219,28 @@ def _set_mapping_type_default(node_tree: bpy.types.NodeTree) -> None:
             # Set default to first mapping type (Planar)
             # Note: The enum uses display names, not identifiers
             item.default_value = MAPPING_TYPES[0][1]  # type: ignore[attr-defined]
+            break
+
+
+def _set_gizmo_default(node_tree: bpy.types.NodeTree) -> None:
+    """Set the default value for the Gizmo interface socket.
+
+    This must be called after the Gizmo Menu Switch node is created and its enum items
+    are defined, as the interface socket needs to reference a valid enum identifier.
+    """
+    interface = node_tree.interface
+    assert interface is not None
+
+    # Find the Gizmo socket in the interface
+    for item in interface.items_tree:
+        if getattr(item, "item_type", None) != "SOCKET":
+            continue
+        if getattr(item, "in_out", None) != "INPUT":
+            continue
+        if getattr(item, "name", None) == SOCKET_SHOW_GIZMO:
+            # Set default to first gizmo type (None)
+            # Note: The enum uses display names, not identifiers
+            item.default_value = GIZMO_TYPES[0][1]  # type: ignore[attr-defined]
             break
 
 
@@ -942,7 +1006,9 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     group.links.new(divide_pi.outputs["Value"], scale_v.inputs[0])
 
     # === Final UV output ===
-    group.links.new(scale_u.outputs["Value"], combine_xyz.inputs["X"])  # Final U (scaled)
+    group.links.new(
+        scale_u.outputs["Value"], combine_xyz.inputs["X"]
+    )  # Final U (scaled)
     group.links.new(scale_v.outputs["Value"], combine_xyz.inputs["Y"])  # V (scaled)
     group.links.new(combine_xyz.outputs["Vector"], output_node.inputs["UV"])
 
@@ -1201,9 +1267,7 @@ def _create_shrink_wrap_mapping_group(  # noqa: PLR0915
     group.links.new(separate_xyz.outputs["X"], atan2_corner.inputs[1])
 
     # === Connect face position ===
-    group.links.new(
-        input_node.outputs["Face Position"], separate_face.inputs["Vector"]
-    )
+    group.links.new(input_node.outputs["Face Position"], separate_face.inputs["Vector"])
     group.links.new(separate_face.outputs["Y"], atan2_face.inputs[0])
     group.links.new(separate_face.outputs["X"], atan2_face.inputs[1])
 
@@ -1507,6 +1571,943 @@ def _create_box_mapping_group(  # noqa: PLR0915
     return group
 
 
+def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
+    node_tree: bpy.types.NodeTree,  # noqa: ARG001
+) -> bpy.types.NodeTree:
+    """Create a node group for cylindrical UV mapping based on normal direction.
+
+    Unlike regular cylindrical mapping which uses position, this maps UVs
+    based on the surface normal direction. This is useful for objects
+    where the surface orientation matters more than its position.
+
+    Position and scale inputs are ignored - only rotation affects the result.
+    U is derived from the normal's azimuthal angle around the Z axis.
+    V is derived from the normal's elevation (angle from XY plane).
+    """
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical Normal"
+
+    if group_name in bpy.data.node_groups:
+        return bpy.data.node_groups[group_name]
+
+    group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
+    group.use_fake_user = True
+
+    interface = group.interface
+    assert interface is not None
+    interface.new_socket(name="Normal", socket_type="NodeSocketVector", in_out="INPUT")
+    interface.new_socket(
+        name="Face Normal", socket_type="NodeSocketVector", in_out="INPUT"
+    )
+    interface.new_socket(name="UV", socket_type="NodeSocketVector", in_out="OUTPUT")
+
+    input_node = group.nodes.new("NodeGroupInput")
+    output_node = group.nodes.new("NodeGroupOutput")
+
+    # Cylindrical normal mapping:
+    # U = atan2(nx, ny) / (2*pi) + 0.5  (azimuthal angle)
+    # V = nz * 0.5 + 0.5  (elevation, mapped to [0,1])
+    # With seam correction using face normal
+
+    # === Corner normal processing ===
+    separate_xyz = group.nodes.new("ShaderNodeSeparateXYZ")
+    separate_xyz.label = "Separate Normal"
+
+    # Corner U = atan2(nx, ny) / (2*pi) + 0.5
+    atan2_node = group.nodes.new("ShaderNodeMath")
+    atan2_node.operation = "ARCTAN2"  # type: ignore[attr-defined]
+    atan2_node.label = "atan2(Nx, Ny)"
+
+    divide_node = group.nodes.new("ShaderNodeMath")
+    divide_node.operation = "DIVIDE"  # type: ignore[attr-defined]
+    divide_node.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
+    divide_node.label = "/ 2π"
+
+    add_node = group.nodes.new("ShaderNodeMath")
+    add_node.operation = "ADD"  # type: ignore[attr-defined]
+    add_node.inputs[1].default_value = 0.5  # type: ignore[index]
+    add_node.label = "+ 0.5 (Corner U)"
+
+    # Corner V = nz * 0.5 + 0.5 (map from [-1,1] to [0,1])
+    scale_v = group.nodes.new("ShaderNodeMath")
+    scale_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_v.inputs[1].default_value = 0.5  # type: ignore[index]
+    scale_v.label = "Nz * 0.5"
+
+    offset_v = group.nodes.new("ShaderNodeMath")
+    offset_v.operation = "ADD"  # type: ignore[attr-defined]
+    offset_v.inputs[1].default_value = 0.5  # type: ignore[index]
+    offset_v.label = "+ 0.5 (V)"
+
+    # === Face normal processing ===
+    separate_face = group.nodes.new("ShaderNodeSeparateXYZ")
+    separate_face.label = "Separate Face Normal"
+
+    # Face U
+    atan2_face = group.nodes.new("ShaderNodeMath")
+    atan2_face.operation = "ARCTAN2"  # type: ignore[attr-defined]
+    atan2_face.label = "atan2 Face"
+
+    divide_face = group.nodes.new("ShaderNodeMath")
+    divide_face.operation = "DIVIDE"  # type: ignore[attr-defined]
+    divide_face.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
+    divide_face.label = "/ 2π Face"
+
+    add_face = group.nodes.new("ShaderNodeMath")
+    add_face.operation = "ADD"  # type: ignore[attr-defined]
+    add_face.inputs[1].default_value = 0.5  # type: ignore[index]
+    add_face.label = "+ 0.5 (Face U)"
+
+    # === Seam correction ===
+    delta_u = group.nodes.new("ShaderNodeMath")
+    delta_u.operation = "SUBTRACT"  # type: ignore[attr-defined]
+    delta_u.label = "U_corner - U_face"
+
+    delta_gt_half = group.nodes.new("ShaderNodeMath")
+    delta_gt_half.operation = "GREATER_THAN"  # type: ignore[attr-defined]
+    delta_gt_half.inputs[1].default_value = 0.5  # type: ignore[index]
+    delta_gt_half.label = "delta > 0.5"
+
+    delta_lt_neg_half = group.nodes.new("ShaderNodeMath")
+    delta_lt_neg_half.operation = "LESS_THAN"  # type: ignore[attr-defined]
+    delta_lt_neg_half.inputs[1].default_value = -0.5  # type: ignore[index]
+    delta_lt_neg_half.label = "delta < -0.5"
+
+    neg_offset = group.nodes.new("ShaderNodeMath")
+    neg_offset.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    neg_offset.inputs[1].default_value = -1.0  # type: ignore[index]
+    neg_offset.label = "-1 * gt"
+
+    total_offset = group.nodes.new("ShaderNodeMath")
+    total_offset.operation = "ADD"  # type: ignore[attr-defined]
+    total_offset.label = "Offset"
+
+    corrected_u = group.nodes.new("ShaderNodeMath")
+    corrected_u.operation = "ADD"  # type: ignore[attr-defined]
+    corrected_u.label = "Corrected U"
+
+    # Internal scale factor for U (-4x to get sensible UV range with correct orientation)
+    scale_u = group.nodes.new("ShaderNodeMath")
+    scale_u.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_u.inputs[1].default_value = -4.0  # type: ignore[index]
+    scale_u.label = "Scale U (-4x)"
+
+    combine_xyz = group.nodes.new("ShaderNodeCombineXYZ")
+    combine_xyz.label = "Combine UV"
+
+    # === Connect corner normal processing ===
+    group.links.new(input_node.outputs["Normal"], separate_xyz.inputs["Vector"])
+
+    # Corner U
+    group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
+    group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
+    group.links.new(atan2_node.outputs["Value"], divide_node.inputs[0])
+    group.links.new(divide_node.outputs["Value"], add_node.inputs[0])
+
+    # Corner V
+    group.links.new(separate_xyz.outputs["Z"], scale_v.inputs[0])
+    group.links.new(scale_v.outputs["Value"], offset_v.inputs[0])
+
+    # === Connect face processing ===
+    group.links.new(input_node.outputs["Face Normal"], separate_face.inputs["Vector"])
+    group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
+    group.links.new(separate_face.outputs["Y"], atan2_face.inputs[1])
+    group.links.new(atan2_face.outputs["Value"], divide_face.inputs[0])
+    group.links.new(divide_face.outputs["Value"], add_face.inputs[0])
+
+    # === Connect seam correction ===
+    group.links.new(add_node.outputs["Value"], delta_u.inputs[0])
+    group.links.new(add_face.outputs["Value"], delta_u.inputs[1])
+
+    group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
+    group.links.new(delta_u.outputs["Value"], delta_lt_neg_half.inputs[0])
+
+    group.links.new(delta_gt_half.outputs["Value"], neg_offset.inputs[0])
+    group.links.new(neg_offset.outputs["Value"], total_offset.inputs[0])
+    group.links.new(delta_lt_neg_half.outputs["Value"], total_offset.inputs[1])
+
+    group.links.new(add_node.outputs["Value"], corrected_u.inputs[0])
+    group.links.new(total_offset.outputs["Value"], corrected_u.inputs[1])
+
+    # === Apply internal U scale ===
+    group.links.new(corrected_u.outputs["Value"], scale_u.inputs[0])
+
+    # === Final UV output ===
+    group.links.new(scale_u.outputs["Value"], combine_xyz.inputs["X"])  # U (scaled)
+    group.links.new(offset_v.outputs["Value"], combine_xyz.inputs["Y"])  # V
+    group.links.new(combine_xyz.outputs["Vector"], output_node.inputs["UV"])
+
+    layout_nodes_pcb_style(group, cell_width=0.0, cell_height=150.0)
+    return group
+
+
+def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
+    node_tree: bpy.types.NodeTree,  # noqa: ARG001
+) -> bpy.types.NodeTree:
+    """Create a node group for cylindrical normal UV mapping with planar caps.
+
+    Uses cylindrical normal mapping for sides and planar normal mapping for caps.
+    Cap detection is based on face normal direction: |face_nz| > threshold means cap.
+    """
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical Capped Normal"
+
+    if group_name in bpy.data.node_groups:
+        return bpy.data.node_groups[group_name]
+
+    group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
+    group.use_fake_user = True
+
+    interface = group.interface
+    assert interface is not None
+    interface.new_socket(name="Normal", socket_type="NodeSocketVector", in_out="INPUT")
+    interface.new_socket(
+        name="Face Normal", socket_type="NodeSocketVector", in_out="INPUT"
+    )
+    interface.new_socket(name="UV", socket_type="NodeSocketVector", in_out="OUTPUT")
+
+    input_node = group.nodes.new("NodeGroupInput")
+    output_node = group.nodes.new("NodeGroupOutput")
+
+    # === Separate inputs ===
+    separate_xyz = group.nodes.new("ShaderNodeSeparateXYZ")
+    separate_xyz.label = "Separate Normal"
+
+    separate_face = group.nodes.new("ShaderNodeSeparateXYZ")
+    separate_face.label = "Separate Face Normal"
+
+    # === Normal-based cap detection ===
+    # A face is a cap when its normal points mostly up or down (|nz| > threshold)
+    # Side faces have normals pointing outward (|nz| small)
+    abs_face_nz = group.nodes.new("ShaderNodeMath")
+    abs_face_nz.operation = "ABSOLUTE"  # type: ignore[attr-defined]
+    abs_face_nz.label = "|Face Nz|"
+
+    is_cap = group.nodes.new("ShaderNodeMath")
+    is_cap.operation = "GREATER_THAN"  # type: ignore[attr-defined]
+    is_cap.inputs[1].default_value = 0.7  # type: ignore[index]
+    is_cap.label = "Is Cap (|Nz| > 0.7)"
+
+    # === Cylindrical UV calculation (for sides) ===
+    # U = atan2(nx, ny) / (2*pi) + 0.5
+    atan2_node = group.nodes.new("ShaderNodeMath")
+    atan2_node.operation = "ARCTAN2"  # type: ignore[attr-defined]
+    atan2_node.label = "atan2(Nx, Ny)"
+
+    divide_2pi = group.nodes.new("ShaderNodeMath")
+    divide_2pi.operation = "DIVIDE"  # type: ignore[attr-defined]
+    divide_2pi.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
+    divide_2pi.label = "/ 2π"
+
+    add_half = group.nodes.new("ShaderNodeMath")
+    add_half.operation = "ADD"  # type: ignore[attr-defined]
+    add_half.inputs[1].default_value = 0.5  # type: ignore[index]
+    add_half.label = "+ 0.5 (Corner U)"
+
+    # V = nz * 0.5 + 0.5 (map from [-1,1] to [0,1])
+    scale_v = group.nodes.new("ShaderNodeMath")
+    scale_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_v.inputs[1].default_value = 0.5  # type: ignore[index]
+    scale_v.label = "Nz * 0.5"
+
+    offset_v = group.nodes.new("ShaderNodeMath")
+    offset_v.operation = "ADD"  # type: ignore[attr-defined]
+    offset_v.inputs[1].default_value = 0.5  # type: ignore[index]
+    offset_v.label = "+ 0.5 (V)"
+
+    # === Face center U calculation (for seam correction) ===
+    atan2_face = group.nodes.new("ShaderNodeMath")
+    atan2_face.operation = "ARCTAN2"  # type: ignore[attr-defined]
+    atan2_face.label = "atan2 Face"
+
+    divide_2pi_face = group.nodes.new("ShaderNodeMath")
+    divide_2pi_face.operation = "DIVIDE"  # type: ignore[attr-defined]
+    divide_2pi_face.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
+    divide_2pi_face.label = "/ 2π Face"
+
+    add_half_face = group.nodes.new("ShaderNodeMath")
+    add_half_face.operation = "ADD"  # type: ignore[attr-defined]
+    add_half_face.inputs[1].default_value = 0.5  # type: ignore[index]
+    add_half_face.label = "+ 0.5 (Face U)"
+
+    # === Seam correction ===
+    delta_u = group.nodes.new("ShaderNodeMath")
+    delta_u.operation = "SUBTRACT"  # type: ignore[attr-defined]
+    delta_u.label = "U_corner - U_face"
+
+    delta_gt_half = group.nodes.new("ShaderNodeMath")
+    delta_gt_half.operation = "GREATER_THAN"  # type: ignore[attr-defined]
+    delta_gt_half.inputs[1].default_value = 0.5  # type: ignore[index]
+    delta_gt_half.label = "delta > 0.5"
+
+    delta_lt_neg_half = group.nodes.new("ShaderNodeMath")
+    delta_lt_neg_half.operation = "LESS_THAN"  # type: ignore[attr-defined]
+    delta_lt_neg_half.inputs[1].default_value = -0.5  # type: ignore[index]
+    delta_lt_neg_half.label = "delta < -0.5"
+
+    neg_offset = group.nodes.new("ShaderNodeMath")
+    neg_offset.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    neg_offset.inputs[1].default_value = -1.0  # type: ignore[index]
+    neg_offset.label = "-1 * gt"
+
+    total_offset = group.nodes.new("ShaderNodeMath")
+    total_offset.operation = "ADD"  # type: ignore[attr-defined]
+    total_offset.label = "Offset"
+
+    corrected_cyl_u = group.nodes.new("ShaderNodeMath")
+    corrected_cyl_u.operation = "ADD"  # type: ignore[attr-defined]
+    corrected_cyl_u.label = "Corrected Cyl U"
+
+    # Internal scale factor for cylindrical U (-4x to get sensible UV range)
+    scale_cyl_u = group.nodes.new("ShaderNodeMath")
+    scale_cyl_u.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_cyl_u.inputs[1].default_value = -4.0  # type: ignore[index]
+    scale_cyl_u.label = "Scale Cyl U (-4x)"
+
+    # Cylindrical UV
+    combine_cyl_uv = group.nodes.new("ShaderNodeCombineXYZ")
+    combine_cyl_uv.label = "Cylindrical UV"
+
+    # === Planar UV calculation (for caps) ===
+    # Use Nx, Ny as UV (normal points up/down, so XY plane is the cap surface)
+    scale_cap_x = group.nodes.new("ShaderNodeMath")
+    scale_cap_x.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_cap_x.inputs[1].default_value = 0.5  # type: ignore[index]
+    scale_cap_x.label = "Scale Cap X (0.5x)"
+
+    scale_cap_y = group.nodes.new("ShaderNodeMath")
+    scale_cap_y.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_cap_y.inputs[1].default_value = 0.5  # type: ignore[index]
+    scale_cap_y.label = "Scale Cap Y (0.5x)"
+
+    combine_planar_uv = group.nodes.new("ShaderNodeCombineXYZ")
+    combine_planar_uv.label = "Planar UV"
+
+    # === Mix between cylindrical and planar based on is_cap ===
+    uv_switch = group.nodes.new("GeometryNodeSwitch")
+    uv_switch.input_type = "VECTOR"  # type: ignore[attr-defined]
+    uv_switch.label = "Cap/Side Switch"
+
+    # === Connect normal ===
+    group.links.new(input_node.outputs["Normal"], separate_xyz.inputs["Vector"])
+
+    # === Connect face normal and cap detection ===
+    group.links.new(input_node.outputs["Face Normal"], separate_face.inputs["Vector"])
+    group.links.new(separate_face.outputs["Z"], abs_face_nz.inputs[0])
+    group.links.new(abs_face_nz.outputs["Value"], is_cap.inputs[0])
+
+    # === Connect cylindrical U calculation ===
+    group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
+    group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
+    group.links.new(atan2_node.outputs["Value"], divide_2pi.inputs[0])
+    group.links.new(divide_2pi.outputs["Value"], add_half.inputs[0])
+
+    # === Connect V calculation ===
+    group.links.new(separate_xyz.outputs["Z"], scale_v.inputs[0])
+    group.links.new(scale_v.outputs["Value"], offset_v.inputs[0])
+
+    # === Connect face U calculation ===
+    group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
+    group.links.new(separate_face.outputs["Y"], atan2_face.inputs[1])
+    group.links.new(atan2_face.outputs["Value"], divide_2pi_face.inputs[0])
+    group.links.new(divide_2pi_face.outputs["Value"], add_half_face.inputs[0])
+
+    # === Connect seam correction ===
+    group.links.new(add_half.outputs["Value"], delta_u.inputs[0])
+    group.links.new(add_half_face.outputs["Value"], delta_u.inputs[1])
+    group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
+    group.links.new(delta_u.outputs["Value"], delta_lt_neg_half.inputs[0])
+    group.links.new(delta_gt_half.outputs["Value"], neg_offset.inputs[0])
+    group.links.new(neg_offset.outputs["Value"], total_offset.inputs[0])
+    group.links.new(delta_lt_neg_half.outputs["Value"], total_offset.inputs[1])
+    group.links.new(add_half.outputs["Value"], corrected_cyl_u.inputs[0])
+    group.links.new(total_offset.outputs["Value"], corrected_cyl_u.inputs[1])
+
+    # === Apply internal U scale to cylindrical ===
+    group.links.new(corrected_cyl_u.outputs["Value"], scale_cyl_u.inputs[0])
+
+    # === Combine cylindrical UV ===
+    group.links.new(scale_cyl_u.outputs["Value"], combine_cyl_uv.inputs["X"])
+    group.links.new(offset_v.outputs["Value"], combine_cyl_uv.inputs["Y"])
+
+    # === Combine planar UV (Nx * 0.5, Ny * 0.5) ===
+    group.links.new(separate_xyz.outputs["X"], scale_cap_x.inputs[0])
+    group.links.new(separate_xyz.outputs["Y"], scale_cap_y.inputs[0])
+    group.links.new(scale_cap_x.outputs["Value"], combine_planar_uv.inputs["X"])
+    group.links.new(scale_cap_y.outputs["Value"], combine_planar_uv.inputs["Y"])
+
+    # === Switch based on is_cap ===
+    group.links.new(is_cap.outputs["Value"], uv_switch.inputs["Switch"])
+    group.links.new(combine_cyl_uv.outputs["Vector"], uv_switch.inputs["False"])
+    group.links.new(combine_planar_uv.outputs["Vector"], uv_switch.inputs["True"])
+
+    # === Output ===
+    group.links.new(uv_switch.outputs["Output"], output_node.inputs["UV"])
+
+    layout_nodes_pcb_style(group, cell_width=0.0, cell_height=150.0)
+    return group
+
+
+def _create_spherical_normal_mapping_group(  # noqa: PLR0915
+    node_tree: bpy.types.NodeTree,  # noqa: ARG001
+) -> bpy.types.NodeTree:
+    """Create a node group for spherical UV mapping based on normal direction.
+
+    Unlike regular spherical mapping which uses position, this maps UVs
+    based on the surface normal direction. This is useful for objects
+    where the surface orientation matters more than its position.
+
+    Position and scale inputs are ignored - only rotation affects the result.
+    Uses the normal direction as if it were a point on a unit sphere.
+    """
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Spherical Normal"
+
+    if group_name in bpy.data.node_groups:
+        return bpy.data.node_groups[group_name]
+
+    group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
+    group.use_fake_user = True
+
+    interface = group.interface
+    assert interface is not None
+    interface.new_socket(name="Normal", socket_type="NodeSocketVector", in_out="INPUT")
+    interface.new_socket(
+        name="Face Normal", socket_type="NodeSocketVector", in_out="INPUT"
+    )
+    interface.new_socket(name="UV", socket_type="NodeSocketVector", in_out="OUTPUT")
+
+    input_node = group.nodes.new("NodeGroupInput")
+    output_node = group.nodes.new("NodeGroupOutput")
+
+    # Spherical normal mapping:
+    # Normal is already normalized (unit length), so we treat it as a point on unit sphere
+    # U = atan2(nx, ny) / (2*pi) + 0.5
+    # V = acos(nz) / pi
+    # With seam and pole correction using face normal
+
+    # === Corner normal processing ===
+    separate_xyz = group.nodes.new("ShaderNodeSeparateXYZ")
+    separate_xyz.label = "Separate Normal"
+
+    # Corner horizontal radius r = sqrt(nx² + ny²) for pole detection
+    corner_x_sq = group.nodes.new("ShaderNodeMath")
+    corner_x_sq.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    corner_x_sq.label = "Nx²"
+
+    corner_y_sq = group.nodes.new("ShaderNodeMath")
+    corner_y_sq.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    corner_y_sq.label = "Ny²"
+
+    corner_r_sq = group.nodes.new("ShaderNodeMath")
+    corner_r_sq.operation = "ADD"  # type: ignore[attr-defined]
+    corner_r_sq.label = "Nx² + Ny²"
+
+    corner_r = group.nodes.new("ShaderNodeMath")
+    corner_r.operation = "SQRT"  # type: ignore[attr-defined]
+    corner_r.label = "Corner R"
+
+    # Corner U calculation
+    atan2_node = group.nodes.new("ShaderNodeMath")
+    atan2_node.operation = "ARCTAN2"  # type: ignore[attr-defined]
+    atan2_node.label = "atan2(Nx, Ny)"
+
+    divide_2pi = group.nodes.new("ShaderNodeMath")
+    divide_2pi.operation = "DIVIDE"  # type: ignore[attr-defined]
+    divide_2pi.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
+    divide_2pi.label = "/ 2π"
+
+    add_half = group.nodes.new("ShaderNodeMath")
+    add_half.operation = "ADD"  # type: ignore[attr-defined]
+    add_half.inputs[1].default_value = 0.5  # type: ignore[index]
+    add_half.label = "+ 0.5 (Corner U)"
+
+    # Corner V calculation (normal is already unit length)
+    clamp_node = group.nodes.new("ShaderNodeClamp")
+    clamp_node.inputs["Min"].default_value = -1.0  # type: ignore[index]
+    clamp_node.inputs["Max"].default_value = 1.0  # type: ignore[index]
+    clamp_node.label = "Clamp Nz"
+
+    acos_node = group.nodes.new("ShaderNodeMath")
+    acos_node.operation = "ARCCOSINE"  # type: ignore[attr-defined]
+    acos_node.label = "acos"
+
+    divide_pi = group.nodes.new("ShaderNodeMath")
+    divide_pi.operation = "DIVIDE"  # type: ignore[attr-defined]
+    divide_pi.inputs[1].default_value = math.pi  # type: ignore[index]
+    divide_pi.label = "/ π"
+
+    # === Face normal processing ===
+    separate_face = group.nodes.new("ShaderNodeSeparateXYZ")
+    separate_face.label = "Separate Face Normal"
+
+    # Face U calculation (needed for seam correction reference)
+    atan2_face = group.nodes.new("ShaderNodeMath")
+    atan2_face.operation = "ARCTAN2"  # type: ignore[attr-defined]
+    atan2_face.label = "atan2 Face"
+
+    divide_2pi_face = group.nodes.new("ShaderNodeMath")
+    divide_2pi_face.operation = "DIVIDE"  # type: ignore[attr-defined]
+    divide_2pi_face.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
+    divide_2pi_face.label = "/ 2π Face"
+
+    add_half_face = group.nodes.new("ShaderNodeMath")
+    add_half_face.operation = "ADD"  # type: ignore[attr-defined]
+    add_half_face.inputs[1].default_value = 0.5  # type: ignore[index]
+    add_half_face.label = "+ 0.5 (Face U)"
+
+    # === Pole blending ===
+    pole_threshold = group.nodes.new("ShaderNodeValue")
+    pole_threshold.outputs[0].default_value = 0.01  # type: ignore[index]
+    pole_threshold.label = "Pole Threshold"
+
+    pole_blend_raw = group.nodes.new("ShaderNodeMath")
+    pole_blend_raw.operation = "DIVIDE"  # type: ignore[attr-defined]
+    pole_blend_raw.label = "Corner R / Threshold"
+
+    pole_blend = group.nodes.new("ShaderNodeClamp")
+    pole_blend.inputs["Min"].default_value = 0.0  # type: ignore[index]
+    pole_blend.inputs["Max"].default_value = 1.0  # type: ignore[index]
+    pole_blend.label = "Pole Blend"
+
+    one_minus_blend = group.nodes.new("ShaderNodeMath")
+    one_minus_blend.operation = "SUBTRACT"  # type: ignore[attr-defined]
+    one_minus_blend.inputs[0].default_value = 1.0  # type: ignore[index]
+    one_minus_blend.label = "1 - Blend"
+
+    face_u_weighted = group.nodes.new("ShaderNodeMath")
+    face_u_weighted.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    face_u_weighted.label = "Face U * (1-blend)"
+
+    corner_u_weighted = group.nodes.new("ShaderNodeMath")
+    corner_u_weighted.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    corner_u_weighted.label = "Corrected Corner U * blend"
+
+    blended_u = group.nodes.new("ShaderNodeMath")
+    blended_u.operation = "ADD"  # type: ignore[attr-defined]
+    blended_u.label = "Final U"
+
+    # Internal scale factors
+    scale_u = group.nodes.new("ShaderNodeMath")
+    scale_u.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_u.inputs[1].default_value = -4.0  # type: ignore[index]
+    scale_u.label = "Scale U (-4x)"
+
+    scale_v = group.nodes.new("ShaderNodeMath")
+    scale_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_v.inputs[1].default_value = -2.0  # type: ignore[index]
+    scale_v.label = "Scale V (-2x)"
+
+    # === Seam correction ===
+    delta_u = group.nodes.new("ShaderNodeMath")
+    delta_u.operation = "SUBTRACT"  # type: ignore[attr-defined]
+    delta_u.label = "U_corner - U_face"
+
+    delta_gt_half = group.nodes.new("ShaderNodeMath")
+    delta_gt_half.operation = "GREATER_THAN"  # type: ignore[attr-defined]
+    delta_gt_half.inputs[1].default_value = 0.5  # type: ignore[index]
+    delta_gt_half.label = "delta > 0.5"
+
+    delta_lt_neg_half = group.nodes.new("ShaderNodeMath")
+    delta_lt_neg_half.operation = "LESS_THAN"  # type: ignore[attr-defined]
+    delta_lt_neg_half.inputs[1].default_value = -0.5  # type: ignore[index]
+    delta_lt_neg_half.label = "delta < -0.5"
+
+    neg_offset = group.nodes.new("ShaderNodeMath")
+    neg_offset.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    neg_offset.inputs[1].default_value = -1.0  # type: ignore[index]
+    neg_offset.label = "-1 * gt"
+
+    total_offset = group.nodes.new("ShaderNodeMath")
+    total_offset.operation = "ADD"  # type: ignore[attr-defined]
+    total_offset.label = "Offset"
+
+    corrected_corner_u = group.nodes.new("ShaderNodeMath")
+    corrected_corner_u.operation = "ADD"  # type: ignore[attr-defined]
+    corrected_corner_u.label = "Corrected Corner U"
+
+    combine_xyz = group.nodes.new("ShaderNodeCombineXYZ")
+    combine_xyz.label = "Combine UV"
+
+    # === Connect corner normal processing ===
+    group.links.new(input_node.outputs["Normal"], separate_xyz.inputs["Vector"])
+
+    # Corner R calculation
+    group.links.new(separate_xyz.outputs["X"], corner_x_sq.inputs[0])
+    group.links.new(separate_xyz.outputs["X"], corner_x_sq.inputs[1])
+    group.links.new(separate_xyz.outputs["Y"], corner_y_sq.inputs[0])
+    group.links.new(separate_xyz.outputs["Y"], corner_y_sq.inputs[1])
+    group.links.new(corner_x_sq.outputs["Value"], corner_r_sq.inputs[0])
+    group.links.new(corner_y_sq.outputs["Value"], corner_r_sq.inputs[1])
+    group.links.new(corner_r_sq.outputs["Value"], corner_r.inputs[0])
+
+    # Corner U
+    group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
+    group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
+    group.links.new(atan2_node.outputs["Value"], divide_2pi.inputs[0])
+    group.links.new(divide_2pi.outputs["Value"], add_half.inputs[0])
+
+    # Corner V (nz clamped then acos)
+    group.links.new(separate_xyz.outputs["Z"], clamp_node.inputs["Value"])
+    group.links.new(clamp_node.outputs["Result"], acos_node.inputs[0])
+    group.links.new(acos_node.outputs["Value"], divide_pi.inputs[0])
+
+    # === Connect face processing ===
+    group.links.new(input_node.outputs["Face Normal"], separate_face.inputs["Vector"])
+
+    # Face U
+    group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
+    group.links.new(separate_face.outputs["Y"], atan2_face.inputs[1])
+    group.links.new(atan2_face.outputs["Value"], divide_2pi_face.inputs[0])
+    group.links.new(divide_2pi_face.outputs["Value"], add_half_face.inputs[0])
+
+    # === Connect pole blending ===
+    group.links.new(corner_r.outputs["Value"], pole_blend_raw.inputs[0])
+    group.links.new(pole_threshold.outputs[0], pole_blend_raw.inputs[1])
+    group.links.new(pole_blend_raw.outputs["Value"], pole_blend.inputs["Value"])
+
+    # === Connect seam correction (BEFORE blending) ===
+    group.links.new(add_half.outputs["Value"], delta_u.inputs[0])
+    group.links.new(add_half_face.outputs["Value"], delta_u.inputs[1])
+
+    group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
+    group.links.new(delta_u.outputs["Value"], delta_lt_neg_half.inputs[0])
+
+    group.links.new(delta_gt_half.outputs["Value"], neg_offset.inputs[0])
+    group.links.new(neg_offset.outputs["Value"], total_offset.inputs[0])
+    group.links.new(delta_lt_neg_half.outputs["Value"], total_offset.inputs[1])
+
+    group.links.new(add_half.outputs["Value"], corrected_corner_u.inputs[0])
+    group.links.new(total_offset.outputs["Value"], corrected_corner_u.inputs[1])
+
+    # === Connect pole blending (AFTER seam correction) ===
+    group.links.new(pole_blend.outputs["Result"], one_minus_blend.inputs[1])
+    group.links.new(add_half_face.outputs["Value"], face_u_weighted.inputs[0])
+    group.links.new(one_minus_blend.outputs["Value"], face_u_weighted.inputs[1])
+    group.links.new(corrected_corner_u.outputs["Value"], corner_u_weighted.inputs[0])
+    group.links.new(pole_blend.outputs["Result"], corner_u_weighted.inputs[1])
+    group.links.new(face_u_weighted.outputs["Value"], blended_u.inputs[0])
+    group.links.new(corner_u_weighted.outputs["Value"], blended_u.inputs[1])
+
+    # === Apply internal UV scale ===
+    group.links.new(blended_u.outputs["Value"], scale_u.inputs[0])
+    group.links.new(divide_pi.outputs["Value"], scale_v.inputs[0])
+
+    # === Final UV output ===
+    group.links.new(scale_u.outputs["Value"], combine_xyz.inputs["X"])  # Final U
+    group.links.new(scale_v.outputs["Value"], combine_xyz.inputs["Y"])  # V
+    group.links.new(combine_xyz.outputs["Vector"], output_node.inputs["UV"])
+
+    layout_nodes_pcb_style(group, cell_width=0.0, cell_height=150.0)
+    return group
+
+
+def _create_shrink_wrap_normal_mapping_group(  # noqa: PLR0915
+    node_tree: bpy.types.NodeTree,  # noqa: ARG001
+) -> bpy.types.NodeTree:
+    """Create a node group for shrink wrap UV mapping based on normal direction.
+
+    Unlike regular shrink wrap mapping which uses position, this maps UVs
+    based on the surface normal direction using azimuthal equidistant projection.
+    This is useful for objects where the surface orientation matters more than position.
+
+    Position and scale inputs are ignored - only rotation affects the result.
+
+    Formula (same as position-based, but using normal):
+      theta = acos(nz)           # angle from +Z axis (normal is unit length)
+      phi = atan2(ny, nx)        # azimuthal angle
+      r = theta / pi             # radial distance (0 at +Z, 1 at -Z)
+      u = r * cos(phi)
+      v = r * sin(phi)
+    """
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Shrink Wrap Normal"
+
+    if group_name in bpy.data.node_groups:
+        return bpy.data.node_groups[group_name]
+
+    group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
+    group.use_fake_user = True
+
+    interface = group.interface
+    assert interface is not None
+    interface.new_socket(name="Normal", socket_type="NodeSocketVector", in_out="INPUT")
+    interface.new_socket(
+        name="Face Normal", socket_type="NodeSocketVector", in_out="INPUT"
+    )
+    interface.new_socket(name="UV", socket_type="NodeSocketVector", in_out="OUTPUT")
+
+    input_node = group.nodes.new("NodeGroupInput")
+    output_node = group.nodes.new("NodeGroupOutput")
+
+    # === Corner normal processing ===
+    separate_xyz = group.nodes.new("ShaderNodeSeparateXYZ")
+    separate_xyz.label = "Separate Normal"
+
+    # theta = acos(nz) - normal is already unit length, no need to divide by length
+    clamp_node = group.nodes.new("ShaderNodeClamp")
+    clamp_node.inputs["Min"].default_value = -1.0  # type: ignore[index]
+    clamp_node.inputs["Max"].default_value = 1.0  # type: ignore[index]
+    clamp_node.label = "Clamp Nz"
+
+    acos_node = group.nodes.new("ShaderNodeMath")
+    acos_node.operation = "ARCCOSINE"  # type: ignore[attr-defined]
+    acos_node.label = "acos (theta)"
+
+    # r = theta / pi
+    divide_pi = group.nodes.new("ShaderNodeMath")
+    divide_pi.operation = "DIVIDE"  # type: ignore[attr-defined]
+    divide_pi.inputs[1].default_value = math.pi  # type: ignore[index]
+    divide_pi.label = "/ π (r)"
+
+    # phi = atan2(ny, nx)
+    atan2_corner = group.nodes.new("ShaderNodeMath")
+    atan2_corner.operation = "ARCTAN2"  # type: ignore[attr-defined]
+    atan2_corner.label = "atan2(Ny, Nx) corner"
+
+    # === Face normal processing ===
+    separate_face = group.nodes.new("ShaderNodeSeparateXYZ")
+    separate_face.label = "Separate Face Normal"
+
+    # Face phi for seam correction reference
+    atan2_face = group.nodes.new("ShaderNodeMath")
+    atan2_face.operation = "ARCTAN2"  # type: ignore[attr-defined]
+    atan2_face.label = "atan2(Ny, Nx) face"
+
+    # === Seam correction for phi ===
+    # delta = phi_corner - phi_face
+    delta_phi = group.nodes.new("ShaderNodeMath")
+    delta_phi.operation = "SUBTRACT"  # type: ignore[attr-defined]
+    delta_phi.label = "phi_corner - phi_face"
+
+    delta_gt_pi = group.nodes.new("ShaderNodeMath")
+    delta_gt_pi.operation = "GREATER_THAN"  # type: ignore[attr-defined]
+    delta_gt_pi.inputs[1].default_value = math.pi  # type: ignore[index]
+    delta_gt_pi.label = "delta > π"
+
+    delta_lt_neg_pi = group.nodes.new("ShaderNodeMath")
+    delta_lt_neg_pi.operation = "LESS_THAN"  # type: ignore[attr-defined]
+    delta_lt_neg_pi.inputs[1].default_value = -math.pi  # type: ignore[index]
+    delta_lt_neg_pi.label = "delta < -π"
+
+    neg_offset = group.nodes.new("ShaderNodeMath")
+    neg_offset.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    neg_offset.inputs[1].default_value = -2.0 * math.pi  # type: ignore[index]
+    neg_offset.label = "-2π * gt"
+
+    pos_offset = group.nodes.new("ShaderNodeMath")
+    pos_offset.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    pos_offset.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
+    pos_offset.label = "+2π * lt"
+
+    raw_offset = group.nodes.new("ShaderNodeMath")
+    raw_offset.operation = "ADD"  # type: ignore[attr-defined]
+    raw_offset.label = "Raw Offset"
+
+    # Disable seam correction near pole: multiply offset by step(r - threshold)
+    pole_cutoff = group.nodes.new("ShaderNodeMath")
+    pole_cutoff.operation = "GREATER_THAN"  # type: ignore[attr-defined]
+    pole_cutoff.inputs[1].default_value = 0.15  # type: ignore[index]
+    pole_cutoff.label = "r > 0.15"
+
+    scaled_offset = group.nodes.new("ShaderNodeMath")
+    scaled_offset.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scaled_offset.label = "Scaled Offset"
+
+    corrected_phi = group.nodes.new("ShaderNodeMath")
+    corrected_phi.operation = "ADD"  # type: ignore[attr-defined]
+    corrected_phi.label = "Corrected Phi"
+
+    # === Final UV calculation (corner) ===
+    cos_phi = group.nodes.new("ShaderNodeMath")
+    cos_phi.operation = "COSINE"  # type: ignore[attr-defined]
+    cos_phi.label = "cos(phi)"
+
+    sin_phi = group.nodes.new("ShaderNodeMath")
+    sin_phi.operation = "SINE"  # type: ignore[attr-defined]
+    sin_phi.label = "sin(phi)"
+
+    # U = r * cos(phi), V = r * sin(phi)
+    corner_u = group.nodes.new("ShaderNodeMath")
+    corner_u.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    corner_u.label = "Corner U"
+
+    corner_v = group.nodes.new("ShaderNodeMath")
+    corner_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    corner_v.label = "Corner V"
+
+    # === Face UV calculation (for -Z pole blending) ===
+    face_clamp = group.nodes.new("ShaderNodeClamp")
+    face_clamp.inputs["Min"].default_value = -1.0  # type: ignore[index]
+    face_clamp.inputs["Max"].default_value = 1.0  # type: ignore[index]
+    face_clamp.label = "Clamp Face Nz"
+
+    face_acos = group.nodes.new("ShaderNodeMath")
+    face_acos.operation = "ARCCOSINE"  # type: ignore[attr-defined]
+    face_acos.label = "Face acos"
+
+    face_r = group.nodes.new("ShaderNodeMath")
+    face_r.operation = "DIVIDE"  # type: ignore[attr-defined]
+    face_r.inputs[1].default_value = math.pi  # type: ignore[index]
+    face_r.label = "Face R"
+
+    face_cos_phi = group.nodes.new("ShaderNodeMath")
+    face_cos_phi.operation = "COSINE"  # type: ignore[attr-defined]
+    face_cos_phi.label = "cos(face phi)"
+
+    face_sin_phi = group.nodes.new("ShaderNodeMath")
+    face_sin_phi.operation = "SINE"  # type: ignore[attr-defined]
+    face_sin_phi.label = "sin(face phi)"
+
+    face_u = group.nodes.new("ShaderNodeMath")
+    face_u.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    face_u.label = "Face U"
+
+    face_v = group.nodes.new("ShaderNodeMath")
+    face_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    face_v.label = "Face V"
+
+    # === -Z pole blending (blend toward face UV when r > 0.85) ===
+    pole_blend_threshold = group.nodes.new("ShaderNodeMath")
+    pole_blend_threshold.operation = "SUBTRACT"  # type: ignore[attr-defined]
+    pole_blend_threshold.inputs[1].default_value = 0.85  # type: ignore[index]
+    pole_blend_threshold.label = "r - 0.85"
+
+    pole_blend_scale = group.nodes.new("ShaderNodeMath")
+    pole_blend_scale.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    pole_blend_scale.inputs[1].default_value = 1.0 / 0.15  # type: ignore[index]
+    pole_blend_scale.label = "Scale to 0-1"
+
+    pole_blend = group.nodes.new("ShaderNodeClamp")
+    pole_blend.inputs["Min"].default_value = 0.0  # type: ignore[index]
+    pole_blend.inputs["Max"].default_value = 1.0  # type: ignore[index]
+    pole_blend.label = "-Z Pole Blend"
+
+    one_minus_blend = group.nodes.new("ShaderNodeMath")
+    one_minus_blend.operation = "SUBTRACT"  # type: ignore[attr-defined]
+    one_minus_blend.inputs[0].default_value = 1.0  # type: ignore[index]
+    one_minus_blend.label = "1 - blend"
+
+    corner_u_weighted = group.nodes.new("ShaderNodeMath")
+    corner_u_weighted.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    corner_u_weighted.label = "Corner U * (1-b)"
+
+    face_u_weighted = group.nodes.new("ShaderNodeMath")
+    face_u_weighted.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    face_u_weighted.label = "Face U * b"
+
+    final_u = group.nodes.new("ShaderNodeMath")
+    final_u.operation = "ADD"  # type: ignore[attr-defined]
+    final_u.label = "Final U"
+
+    corner_v_weighted = group.nodes.new("ShaderNodeMath")
+    corner_v_weighted.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    corner_v_weighted.label = "Corner V * (1-b)"
+
+    face_v_weighted = group.nodes.new("ShaderNodeMath")
+    face_v_weighted.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    face_v_weighted.label = "Face V * b"
+
+    final_v = group.nodes.new("ShaderNodeMath")
+    final_v.operation = "ADD"  # type: ignore[attr-defined]
+    final_v.label = "Final V"
+
+    combine_xyz = group.nodes.new("ShaderNodeCombineXYZ")
+    combine_xyz.label = "Combine UV"
+
+    # === Connect corner normal ===
+    group.links.new(input_node.outputs["Normal"], separate_xyz.inputs["Vector"])
+
+    # Theta and r (no length division needed - normal is unit)
+    group.links.new(separate_xyz.outputs["Z"], clamp_node.inputs["Value"])
+    group.links.new(clamp_node.outputs["Result"], acos_node.inputs[0])
+    group.links.new(acos_node.outputs["Value"], divide_pi.inputs[0])
+
+    # Corner phi
+    group.links.new(separate_xyz.outputs["Y"], atan2_corner.inputs[0])
+    group.links.new(separate_xyz.outputs["X"], atan2_corner.inputs[1])
+
+    # === Connect face normal ===
+    group.links.new(input_node.outputs["Face Normal"], separate_face.inputs["Vector"])
+    group.links.new(separate_face.outputs["Y"], atan2_face.inputs[0])
+    group.links.new(separate_face.outputs["X"], atan2_face.inputs[1])
+
+    # === Connect seam correction ===
+    group.links.new(atan2_corner.outputs["Value"], delta_phi.inputs[0])
+    group.links.new(atan2_face.outputs["Value"], delta_phi.inputs[1])
+
+    group.links.new(delta_phi.outputs["Value"], delta_gt_pi.inputs[0])
+    group.links.new(delta_phi.outputs["Value"], delta_lt_neg_pi.inputs[0])
+
+    group.links.new(delta_gt_pi.outputs["Value"], neg_offset.inputs[0])
+    group.links.new(delta_lt_neg_pi.outputs["Value"], pos_offset.inputs[0])
+
+    group.links.new(neg_offset.outputs["Value"], raw_offset.inputs[0])
+    group.links.new(pos_offset.outputs["Value"], raw_offset.inputs[1])
+
+    # Disable seam correction near pole
+    group.links.new(divide_pi.outputs["Value"], pole_cutoff.inputs[0])
+    group.links.new(raw_offset.outputs["Value"], scaled_offset.inputs[0])
+    group.links.new(pole_cutoff.outputs["Value"], scaled_offset.inputs[1])
+
+    group.links.new(atan2_corner.outputs["Value"], corrected_phi.inputs[0])
+    group.links.new(scaled_offset.outputs["Value"], corrected_phi.inputs[1])
+
+    # === Connect final UV ===
+    group.links.new(corrected_phi.outputs["Value"], cos_phi.inputs[0])
+    group.links.new(corrected_phi.outputs["Value"], sin_phi.inputs[0])
+
+    group.links.new(divide_pi.outputs["Value"], corner_u.inputs[0])
+    group.links.new(cos_phi.outputs["Value"], corner_u.inputs[1])
+
+    group.links.new(divide_pi.outputs["Value"], corner_v.inputs[0])
+    group.links.new(sin_phi.outputs["Value"], corner_v.inputs[1])
+
+    # === Connect face UV calculation ===
+    group.links.new(separate_face.outputs["Z"], face_clamp.inputs["Value"])
+    group.links.new(face_clamp.outputs["Result"], face_acos.inputs[0])
+    group.links.new(face_acos.outputs["Value"], face_r.inputs[0])
+
+    group.links.new(atan2_face.outputs["Value"], face_cos_phi.inputs[0])
+    group.links.new(atan2_face.outputs["Value"], face_sin_phi.inputs[0])
+
+    group.links.new(face_r.outputs["Value"], face_u.inputs[0])
+    group.links.new(face_cos_phi.outputs["Value"], face_u.inputs[1])
+
+    group.links.new(face_r.outputs["Value"], face_v.inputs[0])
+    group.links.new(face_sin_phi.outputs["Value"], face_v.inputs[1])
+
+    # === Connect -Z pole blending ===
+    group.links.new(divide_pi.outputs["Value"], pole_blend_threshold.inputs[0])
+    group.links.new(pole_blend_threshold.outputs["Value"], pole_blend_scale.inputs[0])
+    group.links.new(pole_blend_scale.outputs["Value"], pole_blend.inputs["Value"])
+
+    group.links.new(pole_blend.outputs["Result"], one_minus_blend.inputs[1])
+
+    # Blend U
+    group.links.new(corner_u.outputs["Value"], corner_u_weighted.inputs[0])
+    group.links.new(one_minus_blend.outputs["Value"], corner_u_weighted.inputs[1])
+
+    group.links.new(face_u.outputs["Value"], face_u_weighted.inputs[0])
+    group.links.new(pole_blend.outputs["Result"], face_u_weighted.inputs[1])
+
+    group.links.new(corner_u_weighted.outputs["Value"], final_u.inputs[0])
+    group.links.new(face_u_weighted.outputs["Value"], final_u.inputs[1])
+
+    # Blend V
+    group.links.new(corner_v.outputs["Value"], corner_v_weighted.inputs[0])
+    group.links.new(one_minus_blend.outputs["Value"], corner_v_weighted.inputs[1])
+
+    group.links.new(face_v.outputs["Value"], face_v_weighted.inputs[0])
+    group.links.new(pole_blend.outputs["Result"], face_v_weighted.inputs[1])
+
+    group.links.new(corner_v_weighted.outputs["Value"], final_v.inputs[0])
+    group.links.new(face_v_weighted.outputs["Value"], final_v.inputs[1])
+
+    group.links.new(final_u.outputs["Value"], combine_xyz.inputs["X"])
+    group.links.new(final_v.outputs["Value"], combine_xyz.inputs["Y"])
+    group.links.new(combine_xyz.outputs["Vector"], output_node.inputs["UV"])
+
+    layout_nodes_pcb_style(group, cell_width=0.0, cell_height=150.0)
+    return group
+
+
 def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa: PLR0915
     """Populate a UV Map node group with all mapping nodes and connections.
 
@@ -1563,6 +2564,44 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     corner_index_node.label = "Corner Index"
     corner_index_node.select = False
 
+    # === Smooth Normals Computation ===
+    # Compute smooth vertex normals by averaging face normals at each vertex
+    # This is used for normal-based mappings when "Smooth Normals" is enabled
+
+    # Get vertex index for each corner (used as group ID for accumulation)
+    vertex_of_corner = node_tree.nodes.new("GeometryNodeVertexOfCorner")
+    vertex_of_corner.label = "Vertex of Corner"
+    vertex_of_corner.select = False
+
+    # Get face normal at each corner's face
+    face_normal_at_corner = node_tree.nodes.new("GeometryNodeFieldAtIndex")
+    face_normal_at_corner.data_type = "FLOAT_VECTOR"  # type: ignore[attr-defined]
+    face_normal_at_corner.domain = "FACE"  # type: ignore[attr-defined]
+    face_normal_at_corner.label = "Face Normal at Corner"
+    face_normal_at_corner.select = False
+
+    # Accumulate face normals at vertices (sum all face normals sharing a vertex)
+    # Group by vertex index so all corners of the same vertex accumulate together
+    accumulate_normals = node_tree.nodes.new("GeometryNodeAccumulateField")
+    accumulate_normals.data_type = "FLOAT_VECTOR"  # type: ignore[attr-defined]
+    accumulate_normals.domain = "CORNER"  # type: ignore[attr-defined]
+    accumulate_normals.label = "Accumulate Face Normals"
+    accumulate_normals.select = False
+
+    # Normalize the accumulated normal to get smooth vertex normal
+    normalize_smooth_normal = node_tree.nodes.new("ShaderNodeVectorMath")
+    normalize_smooth_normal.operation = "NORMALIZE"  # type: ignore[attr-defined]
+    normalize_smooth_normal.label = "Normalize Smooth Normal"
+    normalize_smooth_normal.select = False
+
+    # Switch between raw normal and smooth normal based on toggle
+    # NOTE: Only the corner normal is smoothed. Face normal is NEVER smoothed
+    # because it's used as a stable per-face reference for seam correction.
+    smooth_normal_switch = node_tree.nodes.new("GeometryNodeSwitch")
+    smooth_normal_switch.input_type = "VECTOR"  # type: ignore[attr-defined]
+    smooth_normal_switch.label = "Smooth Normal Switch"
+    smooth_normal_switch.select = False
+
     # Transform position relative to UV map origin
     # First subtract position, then apply inverse rotation, then divide by size
     subtract_pos = node_tree.nodes.new("ShaderNodeVectorMath")
@@ -1596,6 +2635,31 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     rotate_face_normal.label = "Rotate Face Normal"
     rotate_face_normal.select = False
 
+    # For normal-based mapping: transform normals by inverse scale and renormalize
+    # This handles non-uniform scaling correctly (inverse transpose of scale matrix)
+    # Step 1: Divide rotated normal by size
+    scale_normal = node_tree.nodes.new("ShaderNodeVectorMath")
+    scale_normal.operation = "DIVIDE"  # type: ignore[attr-defined]
+    scale_normal.label = "Scale Normal (1/Size)"
+    scale_normal.select = False
+
+    # Step 2: Normalize the result
+    normalize_normal = node_tree.nodes.new("ShaderNodeVectorMath")
+    normalize_normal.operation = "NORMALIZE"  # type: ignore[attr-defined]
+    normalize_normal.label = "Normalize Scaled Normal"
+    normalize_normal.select = False
+
+    # Same for face normal
+    scale_face_normal = node_tree.nodes.new("ShaderNodeVectorMath")
+    scale_face_normal.operation = "DIVIDE"  # type: ignore[attr-defined]
+    scale_face_normal.label = "Scale Face Normal (1/Size)"
+    scale_face_normal.select = False
+
+    normalize_face_normal = node_tree.nodes.new("ShaderNodeVectorMath")
+    normalize_face_normal.operation = "NORMALIZE"  # type: ignore[attr-defined]
+    normalize_face_normal.label = "Normalize Scaled Face Normal"
+    normalize_face_normal.select = False
+
     # Transform face position for seam correction (cylindrical/spherical)
     # Face position needs the same transform as vertex position
     subtract_face_pos = node_tree.nodes.new("ShaderNodeVectorMath")
@@ -1619,6 +2683,12 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     spherical_group = _create_spherical_mapping_group(node_tree)
     shrink_wrap_group = _create_shrink_wrap_mapping_group(node_tree)
     box_group = _create_box_mapping_group(node_tree)
+    cylindrical_normal_group = _create_cylindrical_normal_mapping_group(node_tree)
+    cylindrical_capped_normal_group = _create_cylindrical_capped_normal_mapping_group(
+        node_tree
+    )
+    spherical_normal_group = _create_spherical_normal_mapping_group(node_tree)
+    shrink_wrap_normal_group = _create_shrink_wrap_normal_mapping_group(node_tree)
 
     # Create group nodes for each mapping type
     planar_node = node_tree.nodes.new("GeometryNodeGroup")
@@ -1650,6 +2720,56 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     box_node.node_tree = box_group  # type: ignore[attr-defined]
     box_node.label = "Box"
     box_node.select = False
+
+    cylindrical_normal_node = node_tree.nodes.new("GeometryNodeGroup")
+    cylindrical_normal_node.node_tree = cylindrical_normal_group  # type: ignore[attr-defined]
+    cylindrical_normal_node.label = "Cylindrical (Normal)"
+    cylindrical_normal_node.select = False
+
+    cylindrical_capped_normal_node = node_tree.nodes.new("GeometryNodeGroup")
+    cylindrical_capped_normal_node.node_tree = cylindrical_capped_normal_group  # type: ignore[attr-defined]
+    cylindrical_capped_normal_node.label = "Cylindrical Capped (Normal)"
+    cylindrical_capped_normal_node.select = False
+
+    spherical_normal_node = node_tree.nodes.new("GeometryNodeGroup")
+    spherical_normal_node.node_tree = spherical_normal_group  # type: ignore[attr-defined]
+    spherical_normal_node.label = "Spherical (Normal)"
+    spherical_normal_node.select = False
+
+    shrink_wrap_normal_node = node_tree.nodes.new("GeometryNodeGroup")
+    shrink_wrap_normal_node.node_tree = shrink_wrap_normal_group  # type: ignore[attr-defined]
+    shrink_wrap_normal_node.label = "Shrink Wrap (Normal)"
+    shrink_wrap_normal_node.select = False
+
+    # Switch between cylindrical and cylindrical capped based on Cap toggle
+    cylindrical_cap_switch = node_tree.nodes.new("GeometryNodeSwitch")
+    cylindrical_cap_switch.input_type = "VECTOR"  # type: ignore[attr-defined]
+    cylindrical_cap_switch.label = "Cylindrical Cap Switch"
+    cylindrical_cap_switch.select = False
+
+    # Switch between cylindrical normal and cylindrical capped normal based on Cap toggle
+    cylindrical_normal_cap_switch = node_tree.nodes.new("GeometryNodeSwitch")
+    cylindrical_normal_cap_switch.input_type = "VECTOR"  # type: ignore[attr-defined]
+    cylindrical_normal_cap_switch.label = "Cylindrical Normal Cap Switch"
+    cylindrical_normal_cap_switch.select = False
+
+    # Switch between position-based and normal-based cylindrical based on Normal-based toggle
+    cylindrical_normal_switch = node_tree.nodes.new("GeometryNodeSwitch")
+    cylindrical_normal_switch.input_type = "VECTOR"  # type: ignore[attr-defined]
+    cylindrical_normal_switch.label = "Cylindrical Normal-based Switch"
+    cylindrical_normal_switch.select = False
+
+    # Switch between position-based and normal-based spherical based on Normal-based toggle
+    spherical_normal_switch = node_tree.nodes.new("GeometryNodeSwitch")
+    spherical_normal_switch.input_type = "VECTOR"  # type: ignore[attr-defined]
+    spherical_normal_switch.label = "Spherical Normal-based Switch"
+    spherical_normal_switch.select = False
+
+    # Switch between position-based and normal-based shrink wrap based on Normal-based toggle
+    shrink_wrap_normal_switch = node_tree.nodes.new("GeometryNodeSwitch")
+    shrink_wrap_normal_switch.input_type = "VECTOR"  # type: ignore[attr-defined]
+    shrink_wrap_normal_switch.label = "Shrink Wrap Normal-based Switch"
+    shrink_wrap_normal_switch.select = False
 
     # Menu switch for UV output selection
     uv_switch = node_tree.nodes.new("GeometryNodeMenuSwitch")
@@ -1793,8 +2913,10 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     node_tree.links.new(rotate_pos.outputs["Vector"], divide_size.inputs[0])
     node_tree.links.new(input_node.outputs[SOCKET_SIZE], divide_size.inputs[1])
 
-    # Normal transformation
-    node_tree.links.new(normal_node.outputs["Normal"], rotate_normal.inputs["Vector"])
+    # Normal transformation (uses smooth normal if enabled)
+    node_tree.links.new(
+        smooth_normal_switch.outputs["Output"], rotate_normal.inputs["Vector"]
+    )
     node_tree.links.new(
         invert_rot.outputs["Rotation"], rotate_normal.inputs["Rotation"]
     )
@@ -1811,12 +2933,65 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     node_tree.links.new(
         corner_index_node.outputs["Index"], face_of_corner.inputs["Corner Index"]
     )
-    # Rotate the face normal
+
+    # === Smooth Normals Computation Connections ===
+    # Compute smooth vertex normals by averaging face normals at each vertex
+    node_tree.links.new(
+        corner_index_node.outputs["Index"], vertex_of_corner.inputs["Corner Index"]
+    )
+    # Get face normal at each corner
+    node_tree.links.new(
+        face_normal_node.outputs["Normal"], face_normal_at_corner.inputs["Value"]
+    )
+    node_tree.links.new(
+        face_of_corner.outputs["Face Index"], face_normal_at_corner.inputs["Index"]
+    )
+    # Accumulate face normals at each vertex (group by vertex index)
+    node_tree.links.new(
+        face_normal_at_corner.outputs["Value"], accumulate_normals.inputs["Value"]
+    )
+    node_tree.links.new(
+        vertex_of_corner.outputs["Vertex Index"],
+        accumulate_normals.inputs["Group ID"],
+    )
+    # Normalize to get smooth vertex normal
+    node_tree.links.new(
+        accumulate_normals.outputs["Total"], normalize_smooth_normal.inputs[0]
+    )
+    # Switch: False = raw normal, True = smooth normal
+    node_tree.links.new(
+        input_node.outputs[SOCKET_SMOOTH_NORMALS],
+        smooth_normal_switch.inputs["Switch"],
+    )
+    node_tree.links.new(
+        normal_node.outputs["Normal"], smooth_normal_switch.inputs["False"]
+    )
+    node_tree.links.new(
+        normalize_smooth_normal.outputs["Vector"], smooth_normal_switch.inputs["True"]
+    )
+
+    # Rotate the face normal (NEVER smoothed - used for seam correction)
+    # Face normal must be constant per face to provide stable reference for detecting seams
     node_tree.links.new(
         evaluate_face_normal.outputs["Value"], rotate_face_normal.inputs["Vector"]
     )
     node_tree.links.new(
         invert_rot.outputs["Rotation"], rotate_face_normal.inputs["Rotation"]
+    )
+
+    # Scale-adjusted normals for normal-based mapping (handles non-uniform scale)
+    # Normal transformation for non-uniform scale: n' = normalize(n / scale)
+    node_tree.links.new(rotate_normal.outputs["Vector"], scale_normal.inputs[0])
+    node_tree.links.new(input_node.outputs[SOCKET_SIZE], scale_normal.inputs[1])
+    node_tree.links.new(scale_normal.outputs["Vector"], normalize_normal.inputs[0])
+
+    # Same for face normal
+    node_tree.links.new(
+        rotate_face_normal.outputs["Vector"], scale_face_normal.inputs[0]
+    )
+    node_tree.links.new(input_node.outputs[SOCKET_SIZE], scale_face_normal.inputs[1])
+    node_tree.links.new(
+        scale_face_normal.outputs["Vector"], normalize_face_normal.inputs[0]
     )
 
     # Face position evaluation for seam correction (cylindrical/spherical)
@@ -1831,7 +3006,9 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     node_tree.links.new(
         evaluate_face_position.outputs["Value"], subtract_face_pos.inputs[0]
     )
-    node_tree.links.new(input_node.outputs[SOCKET_POSITION], subtract_face_pos.inputs[1])
+    node_tree.links.new(
+        input_node.outputs[SOCKET_POSITION], subtract_face_pos.inputs[1]
+    )
     node_tree.links.new(
         subtract_face_pos.outputs["Vector"], rotate_face_pos.inputs["Vector"]
     )
@@ -1886,8 +3063,44 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
 
     # Box mapping uses face normal for projection selection (avoids interpolation issues)
     node_tree.links.new(divide_size.outputs["Vector"], box_node.inputs["Position"])
+    node_tree.links.new(rotate_face_normal.outputs["Vector"], box_node.inputs["Normal"])
+
+    # Cylindrical (Normal) mapping - uses scale-adjusted normals
+    # For non-uniform scale, normal = normalize(rotated_normal / scale)
     node_tree.links.new(
-        rotate_face_normal.outputs["Vector"], box_node.inputs["Normal"]
+        normalize_normal.outputs["Vector"], cylindrical_normal_node.inputs["Normal"]
+    )
+    node_tree.links.new(
+        normalize_face_normal.outputs["Vector"],
+        cylindrical_normal_node.inputs["Face Normal"],
+    )
+
+    # Cylindrical Capped (Normal) mapping - uses scale-adjusted normals
+    node_tree.links.new(
+        normalize_normal.outputs["Vector"],
+        cylindrical_capped_normal_node.inputs["Normal"],
+    )
+    node_tree.links.new(
+        normalize_face_normal.outputs["Vector"],
+        cylindrical_capped_normal_node.inputs["Face Normal"],
+    )
+
+    # Spherical (Normal) mapping - uses scale-adjusted normals
+    node_tree.links.new(
+        normalize_normal.outputs["Vector"], spherical_normal_node.inputs["Normal"]
+    )
+    node_tree.links.new(
+        normalize_face_normal.outputs["Vector"],
+        spherical_normal_node.inputs["Face Normal"],
+    )
+
+    # Shrink Wrap (Normal) mapping - uses scale-adjusted normals
+    node_tree.links.new(
+        normalize_normal.outputs["Vector"], shrink_wrap_normal_node.inputs["Normal"]
+    )
+    node_tree.links.new(
+        normalize_face_normal.outputs["Vector"],
+        shrink_wrap_normal_node.inputs["Face Normal"],
     )
 
     # Connect mapping outputs to UV switch
@@ -1895,15 +3108,79 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     node_tree.links.new(
         input_node.outputs[SOCKET_MAPPING_TYPE], uv_switch.inputs["Menu"]
     )
+
+    # Cylindrical cap switch: select between cylindrical and cylindrical_capped
+    node_tree.links.new(
+        input_node.outputs[SOCKET_CAP], cylindrical_cap_switch.inputs["Switch"]
+    )
+    node_tree.links.new(
+        cylindrical_node.outputs["UV"], cylindrical_cap_switch.inputs["False"]
+    )
+    node_tree.links.new(
+        cylindrical_capped_node.outputs["UV"], cylindrical_cap_switch.inputs["True"]
+    )
+
+    # Cylindrical (Normal) cap switch: select between cylindrical_normal and
+    # cylindrical_capped_normal
+    node_tree.links.new(
+        input_node.outputs[SOCKET_CAP], cylindrical_normal_cap_switch.inputs["Switch"]
+    )
+    node_tree.links.new(
+        cylindrical_normal_node.outputs["UV"],
+        cylindrical_normal_cap_switch.inputs["False"],
+    )
+    node_tree.links.new(
+        cylindrical_capped_normal_node.outputs["UV"],
+        cylindrical_normal_cap_switch.inputs["True"],
+    )
+
+    # Cylindrical normal-based switch: select between position-based and normal-based
+    node_tree.links.new(
+        input_node.outputs[SOCKET_NORMAL_BASED],
+        cylindrical_normal_switch.inputs["Switch"],
+    )
+    node_tree.links.new(
+        cylindrical_cap_switch.outputs["Output"],
+        cylindrical_normal_switch.inputs["False"],
+    )
+    node_tree.links.new(
+        cylindrical_normal_cap_switch.outputs["Output"],
+        cylindrical_normal_switch.inputs["True"],
+    )
+
+    # Spherical normal-based switch: select between position-based and normal-based
+    node_tree.links.new(
+        input_node.outputs[SOCKET_NORMAL_BASED],
+        spherical_normal_switch.inputs["Switch"],
+    )
+    node_tree.links.new(
+        spherical_node.outputs["UV"], spherical_normal_switch.inputs["False"]
+    )
+    node_tree.links.new(
+        spherical_normal_node.outputs["UV"], spherical_normal_switch.inputs["True"]
+    )
+
+    # Shrink wrap normal-based switch: select between position-based and normal-based
+    node_tree.links.new(
+        input_node.outputs[SOCKET_NORMAL_BASED],
+        shrink_wrap_normal_switch.inputs["Switch"],
+    )
+    node_tree.links.new(
+        shrink_wrap_node.outputs["UV"], shrink_wrap_normal_switch.inputs["False"]
+    )
+    node_tree.links.new(
+        shrink_wrap_normal_node.outputs["UV"], shrink_wrap_normal_switch.inputs["True"]
+    )
+
     # Use indices for inputs since socket names may vary - inputs are: Menu, then one per enum item
-    # Item 0 = Planar, Item 1 = Cylindrical, Item 2 = Cylindrical Capped,
-    # Item 3 = Spherical, Item 4 = Shrink Wrap, Item 5 = Box
+    # Item 0 = Planar, Item 1 = Cylindrical (with cap and normal-based switches),
+    # Item 2 = Spherical (with normal-based switch), Item 3 = Shrink Wrap (with normal-based switch),
+    # Item 4 = Box
     node_tree.links.new(planar_node.outputs["UV"], uv_switch.inputs[1])
-    node_tree.links.new(cylindrical_node.outputs["UV"], uv_switch.inputs[2])
-    node_tree.links.new(cylindrical_capped_node.outputs["UV"], uv_switch.inputs[3])
-    node_tree.links.new(spherical_node.outputs["UV"], uv_switch.inputs[4])
-    node_tree.links.new(shrink_wrap_node.outputs["UV"], uv_switch.inputs[5])
-    node_tree.links.new(box_node.outputs["UV"], uv_switch.inputs[6])
+    node_tree.links.new(cylindrical_normal_switch.outputs["Output"], uv_switch.inputs[2])
+    node_tree.links.new(spherical_normal_switch.outputs["Output"], uv_switch.inputs[3])
+    node_tree.links.new(shrink_wrap_normal_switch.outputs["Output"], uv_switch.inputs[4])
+    node_tree.links.new(box_node.outputs["UV"], uv_switch.inputs[5])
 
     # UV tiling and flip chain
     node_tree.links.new(uv_switch.outputs["Output"], separate_uv.inputs["Vector"])
@@ -1972,12 +3249,10 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     node_tree.links.new(input_node.outputs[SOCKET_UV_MAP], store_uv.inputs["Name"])
     node_tree.links.new(combine_uv.outputs["Vector"], store_uv.inputs["Value"])
 
-    # Add Transform Gizmo for interactive viewport control (Blender 4.3+)
-    # The gizmo's Value input connects to a Combine Transform that takes Position/Rotation/Size
-    # The gizmo's Transform output joins into the geometry
-    transform_gizmo = node_tree.nodes.new("GeometryNodeGizmoTransform")
-    transform_gizmo.label = "UV Map Gizmo"
-    transform_gizmo.select = False
+    # === Gizmo System ===
+    # Create multiple gizmos with different axis configurations
+    # Note: Gizmos in Blender propagate backwards - they read from their Value input
+    # and the Transform output joins into the geometry for visual display
 
     # Combine Transform to create transform matrix from Position/Rotation/Size
     combine_transform = node_tree.nodes.new("FunctionNodeCombineTransform")
@@ -1995,28 +3270,103 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
         input_node.outputs[SOCKET_SIZE], combine_transform.inputs["Scale"]
     )
 
-    # Connect Combine Transform output to gizmo's Value input
+    # Gizmo 1: All (position, rotation, size all enabled)
+    gizmo_all = node_tree.nodes.new("GeometryNodeGizmoTransform")
+    gizmo_all.label = "Gizmo All"
+    gizmo_all.select = False
+    # All axes enabled by default
+
+    # Gizmo 2: Position only
+    gizmo_position = node_tree.nodes.new("GeometryNodeGizmoTransform")
+    gizmo_position.label = "Gizmo Position"
+    gizmo_position.select = False
+    gizmo_position.use_rotation_x = False  # type: ignore[attr-defined]
+    gizmo_position.use_rotation_y = False  # type: ignore[attr-defined]
+    gizmo_position.use_rotation_z = False  # type: ignore[attr-defined]
+    gizmo_position.use_scale_x = False  # type: ignore[attr-defined]
+    gizmo_position.use_scale_y = False  # type: ignore[attr-defined]
+    gizmo_position.use_scale_z = False  # type: ignore[attr-defined]
+
+    # Gizmo 3: Rotation only
+    gizmo_rotation = node_tree.nodes.new("GeometryNodeGizmoTransform")
+    gizmo_rotation.label = "Gizmo Rotation"
+    gizmo_rotation.select = False
+    gizmo_rotation.use_translation_x = False  # type: ignore[attr-defined]
+    gizmo_rotation.use_translation_y = False  # type: ignore[attr-defined]
+    gizmo_rotation.use_translation_z = False  # type: ignore[attr-defined]
+    gizmo_rotation.use_scale_x = False  # type: ignore[attr-defined]
+    gizmo_rotation.use_scale_y = False  # type: ignore[attr-defined]
+    gizmo_rotation.use_scale_z = False  # type: ignore[attr-defined]
+
+    # Gizmo 4: Size only
+    gizmo_size = node_tree.nodes.new("GeometryNodeGizmoTransform")
+    gizmo_size.label = "Gizmo Size"
+    gizmo_size.select = False
+    gizmo_size.use_translation_x = False  # type: ignore[attr-defined]
+    gizmo_size.use_translation_y = False  # type: ignore[attr-defined]
+    gizmo_size.use_translation_z = False  # type: ignore[attr-defined]
+    gizmo_size.use_rotation_x = False  # type: ignore[attr-defined]
+    gizmo_size.use_rotation_y = False  # type: ignore[attr-defined]
+    gizmo_size.use_rotation_z = False  # type: ignore[attr-defined]
+
+    # Connect transform to all gizmos
     node_tree.links.new(
-        combine_transform.outputs["Transform"], transform_gizmo.inputs["Value"]
+        combine_transform.outputs["Transform"], gizmo_all.inputs["Value"]
+    )
+    node_tree.links.new(
+        combine_transform.outputs["Transform"], gizmo_position.inputs["Value"]
+    )
+    node_tree.links.new(
+        combine_transform.outputs["Transform"], gizmo_rotation.inputs["Value"]
+    )
+    node_tree.links.new(
+        combine_transform.outputs["Transform"], gizmo_size.inputs["Value"]
     )
 
-    # Also connect Position and Rotation directly to Gizmo's Position and Rotation inputs
-    # This ensures the gizmo properly follows the overlay position/orientation
-    node_tree.links.new(
-        input_node.outputs[SOCKET_POSITION], transform_gizmo.inputs["Position"]
-    )
-    node_tree.links.new(
-        input_node.outputs[SOCKET_ROTATION], transform_gizmo.inputs["Rotation"]
-    )
+    # Connect Position and Rotation to gizmos for proper orientation
+    for gizmo in [gizmo_all, gizmo_position, gizmo_rotation, gizmo_size]:
+        node_tree.links.new(
+            input_node.outputs[SOCKET_POSITION], gizmo.inputs["Position"]
+        )
+        node_tree.links.new(
+            input_node.outputs[SOCKET_ROTATION], gizmo.inputs["Rotation"]
+        )
 
-    # Join gizmo transform output into geometry
+    # Menu Switch for selecting which gizmo output to use
+    gizmo_switch = node_tree.nodes.new("GeometryNodeMenuSwitch")
+    gizmo_switch.label = "Gizmo Selection"
+    gizmo_switch.data_type = "GEOMETRY"  # type: ignore[attr-defined]
+    gizmo_switch.select = False
+
+    # Configure gizmo switch menu items to match gizmo types
+    gizmo_switch.enum_definition.enum_items.clear()  # type: ignore[attr-defined]
+    for identifier, display_name, description in GIZMO_TYPES:
+        item = gizmo_switch.enum_definition.enum_items.new(identifier)  # type: ignore[attr-defined]
+        item.name = display_name
+        item.description = description
+
+    # Set default to first item (None)
+    gizmo_switch.active_index = 2  # type: ignore[attr-defined]
+
+    # Connect gizmo menu input
+    node_tree.links.new(input_node.outputs[SOCKET_SHOW_GIZMO], gizmo_switch.inputs["Menu"])
+
+    # Connect gizmo outputs to switch
+    # New order: Item 0 = None (empty), Item 1 = Position, Item 2 = Rotation, Item 3 = Size, Item 4 = All
+    # Input 1 (None) left unconnected - will output empty geometry
+    node_tree.links.new(gizmo_position.outputs["Transform"], gizmo_switch.inputs[2])
+    node_tree.links.new(gizmo_rotation.outputs["Transform"], gizmo_switch.inputs[3])
+    node_tree.links.new(gizmo_size.outputs["Transform"], gizmo_switch.inputs[4])
+    node_tree.links.new(gizmo_all.outputs["Transform"], gizmo_switch.inputs[5])
+
+    # Join selected gizmo transform output into geometry
     join_geometry = node_tree.nodes.new("GeometryNodeJoinGeometry")
     join_geometry.label = "Join Gizmo"
     join_geometry.select = False
 
     node_tree.links.new(store_uv.outputs["Geometry"], join_geometry.inputs["Geometry"])
     node_tree.links.new(
-        transform_gizmo.outputs["Transform"], join_geometry.inputs["Geometry"]
+        gizmo_switch.outputs["Output"], join_geometry.inputs["Geometry"]
     )
 
     # Output
@@ -2057,6 +3407,7 @@ def create_uv_map_node_group() -> bpy.types.NodeTree:
     # Set default mapping type after nodes are created
     # (Menu enum items must exist first)
     _set_mapping_type_default(node_tree)
+    _set_gizmo_default(node_tree)
 
     return node_tree
 
@@ -2124,6 +3475,7 @@ def regenerate_uv_map_node_group(  # noqa: PLR0912
     # Set default mapping type after nodes are created
     # (Menu enum items must exist first)
     _set_mapping_type_default(node_tree)
+    _set_gizmo_default(node_tree)
 
     # Restore values to modifiers
     # Build new socket name -> identifier mapping

@@ -3,7 +3,7 @@ Menus module for UV Map addon.
 
 Handles menu integration for:
 - Modifiers > Edit menu (appended at end)
-- Geometry Nodes > Mesh > UV submenu
+- Geometry Nodes > Add > Mesh > UV submenu
 """
 
 from __future__ import annotations
@@ -24,63 +24,82 @@ def _draw_modifier_menu(self: bpy.types.Menu, context: Context) -> None:  # noqa
     layout.operator("uv_map.add_modifier", icon="MOD_UVPROJECT")
 
 
-def _draw_geonodes_menu(self: bpy.types.Menu, context: Context) -> None:  # noqa: ARG001
-    """Draw UV Map item in the Geometry Nodes > Mesh > UV submenu."""
+def _draw_geonodes_uv_menu(self: bpy.types.Menu, context: Context) -> None:  # noqa: ARG001
+    """Draw UV Map item in the Geometry Nodes UV submenu."""
     layout = self.layout
     assert layout is not None
-    layout.operator("uv_map.insert_node_group", icon="MOD_UVPROJECT")
+    layout.operator("uv_map.insert_node_group")
 
 
-# Custom menu class for the UV submenu in geometry nodes
-class NODE_MT_uv_map_submenu(bpy.types.Menu):
-    """UV Map submenu for geometry nodes."""
+# The UV menu in geometry nodes is dynamically generated.
+# In Blender's node_add_menu_geometry.py, the menus are generated with keys from add_menus dict.
+# Looking at the source, there appears to be a naming swap where:
+# - NODE_MT_category_PRIMITIVES_MESH uses NODE_MT_gn_mesh_uv_base
+# - NODE_MT_category_GEO_UV uses NODE_MT_gn_mesh_primitives_base
+# This seems to be a bug in Blender's source, but we handle it.
+_GEONODES_ADD_MENU = "NODE_MT_category_PRIMITIVES_MESH"  # Add menu (swapped naming in Blender)
+_GEONODES_SWAP_MENU = "NODE_MT_gn_mesh_uv_swap"  # Swap menu
 
-    bl_idname = "NODE_MT_uv_map_submenu"
-    bl_label = "UV"
-
-    def draw(self, context: Context) -> None:
-        """Draw the menu."""
-        layout = self.layout
-        assert layout is not None
-        # Our UV Map item
-        layout.operator("uv_map.insert_node_group", icon="MOD_UVPROJECT")
-        layout.separator()
+_registered_add_menu = False
+_registered_swap_menu = False
 
 
 def register_menus() -> None:
     """Register menu items."""
+    global _registered_add_menu, _registered_swap_menu
+
     # Add to the Edit submenu of modifiers (appended at end)
     if hasattr(bpy.types, "OBJECT_MT_modifier_add_edit"):
         bpy.types.OBJECT_MT_modifier_add_edit.append(_draw_modifier_menu)
 
-    # For geometry nodes, add to the UV submenu if it exists
-    if hasattr(bpy.types, "NODE_MT_geometry_node_mesh_uv"):
-        bpy.types.NODE_MT_geometry_node_mesh_uv.prepend(_draw_geonodes_menu)  # type: ignore[attr-defined]
+    # Append to the UV submenu in Geometry Nodes Add menu
+    if hasattr(bpy.types, _GEONODES_ADD_MENU):
+        menu_class = getattr(bpy.types, _GEONODES_ADD_MENU)
+        menu_class.append(_draw_geonodes_uv_menu)
+        _registered_add_menu = True
+        print(f"[uv_map] Registered UV Map in Add menu: {_GEONODES_ADD_MENU}")
 
-    # Add to the node editor add menu's Mesh submenu
-    if hasattr(bpy.types, "NODE_MT_category_GEO_NODE_MESH"):
-        bpy.types.NODE_MT_category_GEO_NODE_MESH.append(_draw_geonodes_menu)  # type: ignore[attr-defined]
+    # Also append to the Swap menu
+    if hasattr(bpy.types, _GEONODES_SWAP_MENU):
+        menu_class = getattr(bpy.types, _GEONODES_SWAP_MENU)
+        menu_class.append(_draw_geonodes_uv_menu)
+        _registered_swap_menu = True
+        print(f"[uv_map] Registered UV Map in Swap menu: {_GEONODES_SWAP_MENU}")
+
+    if not _registered_add_menu and not _registered_swap_menu:
+        # Debug: print available menu types to help diagnose
+        print("[uv_map] Warning: Could not find geometry nodes UV menus")
+        node_menus = [
+            name
+            for name in dir(bpy.types)
+            if name.startswith("NODE_MT") and ("mesh" in name.lower() or "uv" in name.lower())
+        ]
+        print(f"[uv_map] Available NODE_MT menus with 'mesh' or 'uv': {node_menus}")
 
 
 def unregister_menus() -> None:
     """Unregister menu items."""
+    global _registered_add_menu, _registered_swap_menu
+
     # Remove from Edit submenu
     if hasattr(bpy.types, "OBJECT_MT_modifier_add_edit"):
         with contextlib.suppress(ValueError):
             bpy.types.OBJECT_MT_modifier_add_edit.remove(_draw_modifier_menu)
 
-    # Remove from geometry nodes UV menu
-    if hasattr(bpy.types, "NODE_MT_geometry_node_mesh_uv"):
+    # Remove from Add menu
+    if _registered_add_menu and hasattr(bpy.types, _GEONODES_ADD_MENU):
+        menu_class = getattr(bpy.types, _GEONODES_ADD_MENU)
         with contextlib.suppress(ValueError):
-            bpy.types.NODE_MT_geometry_node_mesh_uv.remove(_draw_geonodes_menu)  # type: ignore[attr-defined]
+            menu_class.remove(_draw_geonodes_uv_menu)
+        _registered_add_menu = False
 
-    # Remove from Mesh submenu
-    if hasattr(bpy.types, "NODE_MT_category_GEO_NODE_MESH"):
+    # Remove from Swap menu
+    if _registered_swap_menu and hasattr(bpy.types, _GEONODES_SWAP_MENU):
+        menu_class = getattr(bpy.types, _GEONODES_SWAP_MENU)
         with contextlib.suppress(ValueError):
-            bpy.types.NODE_MT_category_GEO_NODE_MESH.remove(_draw_geonodes_menu)  # type: ignore[attr-defined]
+            menu_class.remove(_draw_geonodes_uv_menu)
+        _registered_swap_menu = False
 
 
-# Classes to register
-classes: list[type] = [
-    NODE_MT_uv_map_submenu,
-]
+# Classes to register (none needed now since we use existing menu)
+classes: list[type] = []
