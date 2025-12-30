@@ -45,6 +45,7 @@ OVERLAY_LINE_WIDTH = 1.0  # Match gridline thickness
 
 # Socket identifiers for the main node group inputs
 SOCKET_GEOMETRY = "Geometry"
+SOCKET_SELECTION = "Selection"
 SOCKET_MAPPING_TYPE = "Mapping Type"
 SOCKET_GIZMO = "Gizmo"
 SOCKET_POSITION = "Position"

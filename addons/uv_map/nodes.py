@@ -23,6 +23,7 @@ from .constants import (
     SOCKET_NORMAL_BASED,
     SOCKET_POSITION,
     SOCKET_ROTATION,
+    SOCKET_SELECTION,
     SOCKET_SHOW_GIZMO,
     SOCKET_SIZE,
     SOCKET_SMOOTH_NORMALS,
@@ -90,19 +91,21 @@ def _node_groups_match_structurally(
     if interface_a is None or interface_b is None:
         return interface_a is None and interface_b is None
 
-    # Gather interface socket info
+    # Gather interface socket info (including flags that affect behavior)
     def get_interface_sockets(
         interface: bpy.types.NodeTreeInterface,
-    ) -> list[tuple[str, str, str]]:
-        """Get list of (name, socket_type, in_out) for each socket."""
-        sockets: list[tuple[str, str, str]] = []
+    ) -> list[tuple[str, str, str, bool, bool]]:
+        """Get list of (name, socket_type, in_out, hide_value, hide_in_modifier) for each socket."""
+        sockets: list[tuple[str, str, str, bool, bool]] = []
         for item in interface.items_tree:
             if getattr(item, "item_type", None) != "SOCKET":
                 continue
             name = getattr(item, "name", "")
             socket_type = getattr(item, "socket_type", "")
             in_out = getattr(item, "in_out", "")
-            sockets.append((name, socket_type, in_out))
+            hide_value = getattr(item, "hide_value", False)
+            hide_in_modifier = getattr(item, "hide_in_modifier", False)
+            sockets.append((name, socket_type, in_out, hide_value, hide_in_modifier))
         return sockets
 
     sockets_a = get_interface_sockets(interface_a)
@@ -240,6 +243,16 @@ def _create_main_interface(node_tree: bpy.types.NodeTree) -> None:
         socket_type="NodeSocketGeometry",
         in_out="INPUT",
     )
+
+    # Selection (optional - defaults to all geometry when not connected)
+    selection_socket = interface.new_socket(
+        name=SOCKET_SELECTION,
+        socket_type="NodeSocketBool",
+        in_out="INPUT",
+    )
+    selection_socket.default_value = True  # type: ignore[attr-defined]
+    selection_socket.hide_value = True  # type: ignore[attr-defined]
+    selection_socket.hide_in_modifier = True  # type: ignore[attr-defined]
 
     # UV Map attribute name (first for easy access)
     uv_map_socket = interface.new_socket(
@@ -3417,6 +3430,9 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     # Store UV attribute
     node_tree.links.new(
         input_node.outputs[SOCKET_GEOMETRY], store_uv.inputs["Geometry"]
+    )
+    node_tree.links.new(
+        input_node.outputs[SOCKET_SELECTION], store_uv.inputs["Selection"]
     )
     node_tree.links.new(input_node.outputs[SOCKET_UV_MAP], store_uv.inputs["Name"])
     node_tree.links.new(combine_uv.outputs["Vector"], store_uv.inputs["Value"])
