@@ -20,7 +20,8 @@ from .constants import (
 )
 from .nodes import (
     _SUB_GROUP_SUFFIXES,
-    create_uv_map_node_group,
+    get_or_create_uv_map_node_group,
+    get_uv_map_node_groups,
     is_uv_map_node_group,
     regenerate_uv_map_node_group,
 )
@@ -51,8 +52,8 @@ class UVMAP_OT_add_modifier(bpy.types.Operator):
             self.report({"ERROR"}, "No active object")
             return {"CANCELLED"}
 
-        # Create the UV Map node group
-        node_tree = create_uv_map_node_group()
+        # Get or create the UV Map node group (reuses existing if unmodified)
+        node_tree = get_or_create_uv_map_node_group()
 
         # Add geometry nodes modifier
         modifier = obj.modifiers.new(name=MODIFIER_NAME, type="NODES")
@@ -100,13 +101,14 @@ class UVMAP_OT_insert_node_group(bpy.types.Operator):
             self.report({"ERROR"}, "No active node tree")
             return {"CANCELLED"}
 
-        # Create the UV Map node group
-        uv_map_group = create_uv_map_node_group()
+        # Get or create the UV Map node group (reuses existing if unmodified)
+        uv_map_group = get_or_create_uv_map_node_group()
 
         # Add a group node referencing it
         group_node = node_tree.nodes.new("GeometryNodeGroup")
         group_node.node_tree = uv_map_group  # type: ignore[attr-defined]
         group_node.label = UV_MAP_NODE_GROUP_PREFIX
+        group_node.width = 200  # Wider to avoid text clipping
 
         # Position at cursor location in node editor
         cursor_location = getattr(space, "cursor_location", (0.0, 0.0))
@@ -224,6 +226,46 @@ class UVMAP_OT_regenerate_node_groups(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class UVMAP_OT_regenerate_confirm(bpy.types.Operator):
+    """Confirmation dialog for regenerating UV Map node groups."""
+
+    bl_idname = "uv_map.regenerate_confirm"
+    bl_label = "Regenerate UV Map Node Groups?"
+    bl_description = "Show confirmation dialog before regenerating node groups"
+    bl_options = {"INTERNAL", "BLOCKING"}
+
+    def execute(self, context: Context) -> set[OperatorReturnItems]:
+        """Execute the regeneration."""
+        return bpy.ops.uv_map.regenerate_node_groups()  # type: ignore[return-value]
+
+    def invoke(self, context: Context, event: Event) -> set[OperatorReturnItems]:
+        """Show confirmation dialog."""
+        wm = context.window_manager
+        if wm is None:
+            return {"CANCELLED"}
+        return wm.invoke_props_dialog(self, width=400, confirm_text="Regenerate")
+
+    def draw(self, context: Context) -> None:
+        """Draw the dialog content."""
+        layout = self.layout
+        if layout is None:
+            return
+
+        existing_groups = get_uv_map_node_groups()
+
+        layout.label(
+            text=f"Found {len(existing_groups)} UV Map node group(s) that may be outdated.",
+            icon="INFO",
+        )
+        layout.separator()
+        layout.label(text="The UV Map addon has been updated. Regenerating will:")
+        col = layout.column(align=True)
+        col.label(text="• Update all UV Map node groups to the latest version")
+        col.label(text="• Preserve your modifier settings where possible")
+        layout.separator()
+        layout.label(text="Click OK to regenerate, or Cancel to keep existing groups.")
+
+
 def get_active_uv_map_node_group(context: Context) -> bpy.types.NodeTree | None:
     """Get the UV Map node group from the active modifier, if any.
 
@@ -294,7 +336,9 @@ def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
     # (because the node has type selector and Menu input before the enum items)
     mapping_type_id = socket_ids.get(SOCKET_MAPPING_TYPE)
     if mapping_type_id:
-        mapping_value = modifier.get(mapping_type_id, 2)  # Default to first item (index 2)
+        mapping_value = modifier.get(
+            mapping_type_id, 2
+        )  # Default to first item (index 2)
         if isinstance(mapping_value, int):
             # Subtract 2 to get 0-based index into MAPPING_TYPES
             adjusted_index = mapping_value - 2
@@ -314,7 +358,11 @@ def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
         pos = modifier.get(pos_id)
         if pos is not None and hasattr(pos, "__len__") and len(pos) >= 3:
             pos_list = list(pos)
-            params["position"] = (float(pos_list[0]), float(pos_list[1]), float(pos_list[2]))
+            params["position"] = (
+                float(pos_list[0]),
+                float(pos_list[1]),
+                float(pos_list[2]),
+            )
         else:
             params["position"] = (0.0, 0.0, 0.0)
 
@@ -324,7 +372,11 @@ def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
         rot = modifier.get(rot_id)
         if rot is not None and hasattr(rot, "__len__") and len(rot) >= 3:
             rot_list = list(rot)
-            params["rotation"] = (float(rot_list[0]), float(rot_list[1]), float(rot_list[2]))
+            params["rotation"] = (
+                float(rot_list[0]),
+                float(rot_list[1]),
+                float(rot_list[2]),
+            )
         else:
             params["rotation"] = (0.0, 0.0, 0.0)
 
@@ -334,7 +386,11 @@ def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
         size = modifier.get(size_id)
         if size is not None and hasattr(size, "__len__") and len(size) >= 3:
             size_list = list(size)
-            params["size"] = (float(size_list[0]), float(size_list[1]), float(size_list[2]))
+            params["size"] = (
+                float(size_list[0]),
+                float(size_list[1]),
+                float(size_list[2]),
+            )
         else:
             params["size"] = (1.0, 1.0, 1.0)
 
@@ -374,4 +430,5 @@ classes: list[type] = [
     UVMAP_OT_insert_node_group,
     UVMAP_OT_select_uv_map_modifier,
     UVMAP_OT_regenerate_node_groups,
+    UVMAP_OT_regenerate_confirm,
 ]

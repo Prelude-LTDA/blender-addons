@@ -95,9 +95,19 @@ class VOXELTERRAIN_PT_npanel_voxel_grid(bpy.types.Panel):
         col = layout.column()
         col.label(text="Grid Z")
         row = col.row(align=True)
-        row.prop_enum(props, "voxel_grid_z_source", "ORIGIN", text="Origin", icon="WORLD")
-        row.prop_enum(props, "voxel_grid_z_source", "CURSOR", text="Cursor", icon="PIVOT_CURSOR")
-        row.prop_enum(props, "voxel_grid_z_source", "SELECTION", text="Selection", icon="OBJECT_DATA")
+        row.prop_enum(
+            props, "voxel_grid_z_source", "ORIGIN", text="Origin", icon="WORLD"
+        )
+        row.prop_enum(
+            props, "voxel_grid_z_source", "CURSOR", text="Cursor", icon="PIVOT_CURSOR"
+        )
+        row.prop_enum(
+            props,
+            "voxel_grid_z_source",
+            "SELECTION",
+            text="Selection",
+            icon="OBJECT_DATA",
+        )
 
         # Grid Bounds picker (toggle buttons via operators)
         col = layout.column()
@@ -230,7 +240,10 @@ class VOXELTERRAIN_PT_scene_settings(bpy.types.Panel):
         levels = props.lod_levels
         unit_settings = scene.unit_settings
 
-        sizes = [_format_lod_size(voxel_size * (factor**i), unit_settings) for i in range(levels)]
+        sizes = [
+            _format_lod_size(voxel_size * (factor**i), unit_settings)
+            for i in range(levels)
+        ]
 
         # LOD size preview (right-aligned in box)
         box = layout.box()

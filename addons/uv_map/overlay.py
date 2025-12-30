@@ -1057,20 +1057,19 @@ def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
                 (v[0] + obj_origin.x, v[1] + obj_origin.y, v[2] + obj_origin.z)
                 for v in vertices
             ]
+        # Position-based mapping
+        elif cap:
+            vertices = _generate_cylinder_capped_vertices(
+                (world_position.x, world_position.y, world_position.z),
+                combined_rotation,
+                world_size,
+            )
         else:
-            # Position-based mapping
-            if cap:
-                vertices = _generate_cylinder_capped_vertices(
-                    (world_position.x, world_position.y, world_position.z),
-                    combined_rotation,
-                    world_size,
-                )
-            else:
-                vertices = _generate_cylinder_vertices(
-                    (world_position.x, world_position.y, world_position.z),
-                    combined_rotation,
-                    world_size,
-                )
+            vertices = _generate_cylinder_vertices(
+                (world_position.x, world_position.y, world_position.z),
+                combined_rotation,
+                world_size,
+            )
     elif mapping_type == MAPPING_SPHERICAL:
         if normal_based:
             # Normal-based mapping: position is irrelevant, but scale affects normals

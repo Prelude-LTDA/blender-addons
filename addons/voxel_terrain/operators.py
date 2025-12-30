@@ -361,7 +361,6 @@ class VOXELTERRAIN_OT_generate(bpy.types.Operator):
                 self.report({"ERROR"}, result.message)
                 return {"CANCELLED"}
 
-
         return {"RUNNING_MODAL"}
 
     def finish(self, context: Context) -> None:
@@ -734,9 +733,7 @@ class VOXELTERRAIN_OT_export(bpy.types.Operator):
 
         return self._do_export(context, path)
 
-    def _do_export(
-        self, context: Context, path: Path
-    ) -> set[OperatorReturnItems]:
+    def _do_export(self, context: Context, path: Path) -> set[OperatorReturnItems]:
         """Shared export logic."""
         assert context.scene is not None
         props = get_scene_props(context.scene)
@@ -759,7 +756,7 @@ class VOXELTERRAIN_OT_export(bpy.types.Operator):
             {"INFO"},
             f"Exported to {path} | Chunk: "
             f"({chunk_size[0]:.0f}, {chunk_size[1]:.0f}, {chunk_size[2]:.0f}) | "
-            f"Voxel: {voxel_size:.3g} | LOD: {lod_levels}x (factor {lod_factor})"
+            f"Voxel: {voxel_size:.3g} | LOD: {lod_levels}x (factor {lod_factor})",
         )
 
         return {"FINISHED"}
@@ -832,7 +829,7 @@ class VOXELTERRAIN_OT_export_dialog(bpy.types.Operator):
             {"INFO"},
             f"Exported to {path} | Chunk: "
             f"({chunk_size[0]:.0f}, {chunk_size[1]:.0f}, {chunk_size[2]:.0f}) | "
-            f"Voxel: {voxel_size:.3g} | LOD: {lod_levels}x (factor {lod_factor})"
+            f"Voxel: {voxel_size:.3g} | LOD: {lod_levels}x (factor {lod_factor})",
         )
 
         return {"FINISHED"}
@@ -842,9 +839,7 @@ def menu_func_export(self: bpy.types.Menu, context: Context) -> None:  # noqa: A
     """Add export option to File > Export menu."""
     layout = self.layout
     assert layout is not None
-    layout.operator(
-        VOXELTERRAIN_OT_export_dialog.bl_idname, text="Voxel Terrain"
-    )
+    layout.operator(VOXELTERRAIN_OT_export_dialog.bl_idname, text="Voxel Terrain")
 
 
 class VOXELTERRAIN_OT_set_view_lod(bpy.types.Operator):
@@ -891,7 +886,9 @@ class VOXELTERRAIN_OT_toggle_grid_bounds(bpy.types.Operator):
         default="chunks",
     )  # type: ignore[valid-type]
 
-    def invoke(self, context: Context, event: bpy.types.Event) -> set[OperatorReturnItems]:
+    def invoke(
+        self, context: Context, event: bpy.types.Event
+    ) -> set[OperatorReturnItems]:
         """Handle the operator invocation with modifier key detection."""
         assert context.scene is not None
         props = get_scene_props(context.scene)
@@ -1016,7 +1013,9 @@ class VOXELTERRAIN_OT_new_node_group(bpy.types.Operator):
 
     bl_idname = "voxel_terrain.new_node_group"
     bl_label = "New Voxel Terrain Node Group"
-    bl_description = "Create a new Geometry Nodes group with the correct socket interface"
+    bl_description = (
+        "Create a new Geometry Nodes group with the correct socket interface"
+    )
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod

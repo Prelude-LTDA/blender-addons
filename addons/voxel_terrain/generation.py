@@ -135,7 +135,11 @@ def calculate_chunks_for_lod(
 
     # Get chunk_size as a tuple of floats (it's a Vector from FloatVectorProperty)
     chunk_size_prop = getattr(scene_props, "chunk_size", (16.0, 16.0, 16.0))
-    chunk_size = (float(chunk_size_prop[0]), float(chunk_size_prop[1]), float(chunk_size_prop[2]))
+    chunk_size = (
+        float(chunk_size_prop[0]),
+        float(chunk_size_prop[1]),
+        float(chunk_size_prop[2]),
+    )
     base_voxel_size = float(getattr(scene_props, "voxel_size", 1.0))
     lod_factor = float(getattr(scene_props, "lod_factor", 2.0))
     skirt_size = int(getattr(scene_props, "skirt_size", 1))

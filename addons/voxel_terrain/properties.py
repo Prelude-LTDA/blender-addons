@@ -18,7 +18,9 @@ from bpy.props import (
 from bpy.types import NodeTree, PropertyGroup
 
 
-def _clamp_view_lod(self: VoxelTerrainSceneProperties, _context: bpy.types.Context) -> None:
+def _clamp_view_lod(
+    self: VoxelTerrainSceneProperties, _context: bpy.types.Context
+) -> None:
     """Clamp view_lod to valid range when lod_levels changes."""
     max_lod = self.lod_levels - 1
     self.view_lod = min(self.view_lod, max_lod)

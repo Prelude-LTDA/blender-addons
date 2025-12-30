@@ -92,12 +92,15 @@ def register() -> None:
 
     # Add to context menu (right-click)
     from . import operators
+
     operators.register_menus()
 
     # Register keyboard shortcut
     wm = bpy.context.window_manager
     if wm is not None and wm.keyconfigs.addon is not None:
-        km = wm.keyconfigs.addon.keymaps.new(name="Node Editor", space_type="NODE_EDITOR")
+        km = wm.keyconfigs.addon.keymaps.new(
+            name="Node Editor", space_type="NODE_EDITOR"
+        )
         kmi = km.keymap_items.new("node.auto_layout", "V", "PRESS")
         addon_keymaps.append((km, kmi))
 
@@ -111,6 +114,7 @@ def unregister() -> None:
 
     # Remove from context menu
     from . import operators
+
     operators.unregister_menus()
 
     # Remove from menus

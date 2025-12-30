@@ -174,8 +174,7 @@ def _calculate_max_node_width(node_tree: NodeTree) -> float:
             continue
         # dimensions are in screen pixels, divide by ui_scale
         width = node.dimensions[0] / ui_scale
-        if width > max_width:
-            max_width = width
+        max_width = max(max_width, width)
 
     # Fallback to 200 if no valid widths found (nodes not drawn yet)
     return max_width if max_width > 0 else 200.0
@@ -665,7 +664,11 @@ class NODE_OT_auto_layout(bpy.types.Operator):
         # Auto-detect cell_width from max node width if set to 0 (auto)
         if self.cell_width <= 0:
             space = context.space_data
-            if space is not None and hasattr(space, "edit_tree") and space.edit_tree is not None:  # type: ignore[union-attr]
+            if (
+                space is not None
+                and hasattr(space, "edit_tree")
+                and space.edit_tree is not None
+            ):  # type: ignore[union-attr]
                 self.cell_width = _calculate_max_node_width(space.edit_tree)  # type: ignore[union-attr]
 
         result = self.execute(context)

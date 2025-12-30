@@ -943,7 +943,9 @@ def compute_node_columns(
             for node in raw_positions:
                 relative_x = raw_positions[node] - min_x
                 col_index = round(relative_x / column_width) if column_width > 0 else 0
-                raw_positions[node] = float(-col_index)  # Negate so left = higher column
+                raw_positions[node] = float(
+                    -col_index
+                )  # Negate so left = higher column
 
         # Skip shaker refinement for position-based sorting
         # (we want to preserve the original spatial arrangement)
@@ -1057,8 +1059,7 @@ def layout_nodes_pcb_style(
         if node.type not in ("REROUTE", "FRAME"):
             if nodes_to_layout is None or node in nodes_to_layout:
                 width = node.dimensions[0] / ui_scale
-                if width > max_node_width:
-                    max_node_width = width
+                max_node_width = max(max_node_width, width)
     if max_node_width <= 0:
         max_node_width = 200.0  # Fallback if nodes not drawn yet
     column_width = min(cell_width, max_node_width) + lane_gap
@@ -1294,7 +1295,11 @@ def _calculate_node_row_span(
     # smooth decay that starts almost linear but asymptotically approaches 0
     stagger_bonus = lane_gap / (1.0 + row_index * 0.1) if row_index >= 0 else lane_gap
     effective_cell = cell_height + lane_gap + stagger_bonus
-    rows_needed = math.ceil((node_height + lane_gap) / effective_cell) if effective_cell > 0 else 1
+    rows_needed = (
+        math.ceil((node_height + lane_gap) / effective_cell)
+        if effective_cell > 0
+        else 1
+    )
 
     return max(1, rows_needed)
 

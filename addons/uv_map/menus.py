@@ -37,7 +37,9 @@ def _draw_geonodes_uv_menu(self: bpy.types.Menu, context: Context) -> None:  # n
 # - NODE_MT_category_PRIMITIVES_MESH uses NODE_MT_gn_mesh_uv_base
 # - NODE_MT_category_GEO_UV uses NODE_MT_gn_mesh_primitives_base
 # This seems to be a bug in Blender's source, but we handle it.
-_GEONODES_ADD_MENU = "NODE_MT_category_PRIMITIVES_MESH"  # Add menu (swapped naming in Blender)
+_GEONODES_ADD_MENU = (
+    "NODE_MT_category_PRIMITIVES_MESH"  # Add menu (swapped naming in Blender)
+)
 _GEONODES_SWAP_MENU = "NODE_MT_gn_mesh_uv_swap"  # Swap menu
 
 _registered_add_menu = False
@@ -72,7 +74,8 @@ def register_menus() -> None:
         node_menus = [
             name
             for name in dir(bpy.types)
-            if name.startswith("NODE_MT") and ("mesh" in name.lower() or "uv" in name.lower())
+            if name.startswith("NODE_MT")
+            and ("mesh" in name.lower() or "uv" in name.lower())
         ]
         print(f"[uv_map] Available NODE_MT menus with 'mesh' or 'uv': {node_menus}")
 

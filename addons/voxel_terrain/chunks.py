@@ -28,12 +28,15 @@ _draw_handler: object | None = None
 
 # Current processing chunk state (set by generation operators)
 # Contains: (chunk_min, chunk_max, skirt_min, skirt_max)
-_current_processing_chunk: tuple[
-    tuple[float, float, float],  # chunk min bounds
-    tuple[float, float, float],  # chunk max bounds
-    tuple[float, float, float],  # skirt min bounds
-    tuple[float, float, float],  # skirt max bounds
-] | None = None
+_current_processing_chunk: (
+    tuple[
+        tuple[float, float, float],  # chunk min bounds
+        tuple[float, float, float],  # chunk max bounds
+        tuple[float, float, float],  # skirt min bounds
+        tuple[float, float, float],  # skirt max bounds
+    ]
+    | None
+) = None
 
 
 def set_current_processing_chunk(
@@ -108,17 +111,23 @@ def calculate_world_bounds(
 
     # Initialize with first object's bounds
     first_obj = objects[0]
-    bbox_corners = [first_obj.matrix_world @ Vector(corner) for corner in first_obj.bound_box]
-    min_corner = Vector((
-        min(c.x for c in bbox_corners),
-        min(c.y for c in bbox_corners),
-        min(c.z for c in bbox_corners),
-    ))
-    max_corner = Vector((
-        max(c.x for c in bbox_corners),
-        max(c.y for c in bbox_corners),
-        max(c.z for c in bbox_corners),
-    ))
+    bbox_corners = [
+        first_obj.matrix_world @ Vector(corner) for corner in first_obj.bound_box
+    ]
+    min_corner = Vector(
+        (
+            min(c.x for c in bbox_corners),
+            min(c.y for c in bbox_corners),
+            min(c.z for c in bbox_corners),
+        )
+    )
+    max_corner = Vector(
+        (
+            max(c.x for c in bbox_corners),
+            max(c.y for c in bbox_corners),
+            max(c.z for c in bbox_corners),
+        )
+    )
 
     # Expand bounds with remaining objects
     for obj in objects[1:]:
@@ -430,7 +439,9 @@ def generate_world_bounds_grid_vertices(
     return vertices, edges
 
 
-def _get_grid_z(props: object, scene: bpy.types.Scene, context: bpy.types.Context) -> float:
+def _get_grid_z(
+    props: object, scene: bpy.types.Scene, context: bpy.types.Context
+) -> float:
     """Get the Z position for the voxel grid based on user settings."""
     z_source = getattr(props, "voxel_grid_z_source", "ORIGIN")
     if z_source == "CURSOR":
@@ -492,7 +503,7 @@ def _draw_voxel_grids(
     lod_factor = getattr(props, "lod_factor", 2.0)
 
     lod_level = min(view_lod, lod_levels - 1) if enable_lod else 0
-    grid_voxel_size = voxel_size * (lod_factor ** lod_level)
+    grid_voxel_size = voxel_size * (lod_factor**lod_level)
     grid_z = _get_grid_z(props, scene, context)
 
     show_chunks_grid = getattr(props, "voxel_grid_bounds_chunks", True)
@@ -563,11 +574,20 @@ def _draw_processing_chunk_highlight(
     # 12 edges of the chunk box
     chunk_edges: list[tuple[int, int]] = [
         # Bottom face
-        (0, 1), (1, 2), (2, 3), (3, 0),
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (3, 0),
         # Top face
-        (4, 5), (5, 6), (6, 7), (7, 4),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (7, 4),
         # Vertical edges
-        (0, 4), (1, 5), (2, 6), (3, 7),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
     ]
 
     # Draw chunk box with bright yellow/gold color
@@ -656,7 +676,11 @@ def draw_chunks() -> None:
     show_selection_grid = getattr(props, "voxel_grid_bounds_selection", False)
     can_draw_selection_grid = props.show_voxel_grid and show_selection_grid
 
-    if chunk_bounds is None and not can_draw_selection_grid and not has_processing_chunk:
+    if (
+        chunk_bounds is None
+        and not can_draw_selection_grid
+        and not has_processing_chunk
+    ):
         return
 
     # Get viewport dimensions for the shader

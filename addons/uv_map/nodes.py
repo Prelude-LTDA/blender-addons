@@ -54,6 +54,174 @@ _SUB_GROUP_SUFFIXES = [
 ]
 
 
+def _node_groups_match_structurally(
+    group_a: bpy.types.NodeTree | None,
+    group_b: bpy.types.NodeTree | None,
+) -> bool:
+    """Check if two node groups have the same structural content.
+
+    Compares:
+    - Interface sockets (names, types, directions)
+    - Node types and counts
+    - Link connections (from/to socket names and node indices)
+
+    Does NOT compare:
+    - Node positions/locations
+    - Node labels (only types matter)
+    - Default values on sockets
+    - Custom properties
+
+    Args:
+        group_a: First node group to compare
+        group_b: Second node group to compare
+
+    Returns:
+        True if the groups match structurally, False otherwise.
+    """
+    if group_a is None or group_b is None:
+        return False
+
+    if group_a.type != group_b.type:
+        return False
+
+    # Compare interface sockets
+    interface_a = group_a.interface
+    interface_b = group_b.interface
+    if interface_a is None or interface_b is None:
+        return interface_a is None and interface_b is None
+
+    # Gather interface socket info
+    def get_interface_sockets(
+        interface: bpy.types.NodeTreeInterface,
+    ) -> list[tuple[str, str, str]]:
+        """Get list of (name, socket_type, in_out) for each socket."""
+        sockets: list[tuple[str, str, str]] = []
+        for item in interface.items_tree:
+            if getattr(item, "item_type", None) != "SOCKET":
+                continue
+            name = getattr(item, "name", "")
+            socket_type = getattr(item, "socket_type", "")
+            in_out = getattr(item, "in_out", "")
+            sockets.append((name, socket_type, in_out))
+        return sockets
+
+    sockets_a = get_interface_sockets(interface_a)
+    sockets_b = get_interface_sockets(interface_b)
+
+    if sockets_a != sockets_b:
+        return False
+
+    # Compare nodes (by type and count)
+    nodes_a = list(group_a.nodes)
+    nodes_b = list(group_b.nodes)
+
+    if len(nodes_a) != len(nodes_b):
+        return False
+
+    # Build node type signatures (sorted to handle reordering)
+    def get_node_signature(node: bpy.types.Node) -> tuple[str, str | None]:
+        """Get a signature for a node: (bl_idname, node_tree_name for groups)."""
+        node_tree_name: str | None = None
+        node_tree = getattr(node, "node_tree", None)
+        if node_tree is not None:
+            node_tree_name = node_tree.name
+        return (node.bl_idname, node_tree_name)
+
+    sigs_a = sorted(get_node_signature(n) for n in nodes_a)
+    sigs_b = sorted(get_node_signature(n) for n in nodes_b)
+
+    if sigs_a != sigs_b:
+        return False
+
+    # Compare links (connections)
+    # Build a node -> index map for consistent comparison
+    # Sort nodes by type first, then by their outputs/inputs pattern
+    def node_sort_key(node: bpy.types.Node) -> tuple[str, str, int, int]:
+        """Create a stable sort key for nodes."""
+        node_tree_name = ""
+        node_tree = getattr(node, "node_tree", None)
+        if node_tree is not None:
+            node_tree_name = node_tree.name
+        return (
+            node.bl_idname,
+            node_tree_name,
+            len(node.inputs),
+            len(node.outputs),
+        )
+
+    sorted_nodes_a = sorted(nodes_a, key=node_sort_key)
+    sorted_nodes_b = sorted(nodes_b, key=node_sort_key)
+
+    node_index_a = {node: i for i, node in enumerate(sorted_nodes_a)}
+    node_index_b = {node: i for i, node in enumerate(sorted_nodes_b)}
+
+    # Get link signatures: (from_node_index, from_socket_name, to_node_index, to_socket_name)
+    def get_link_signatures(
+        links: bpy.types.NodeLinks,
+        node_index: dict[bpy.types.Node, int],
+    ) -> set[tuple[int, str, int, str]]:
+        """Get set of link signatures."""
+        signatures: set[tuple[int, str, int, str]] = set()
+        for link in links:
+            from_node = link.from_node
+            to_node = link.to_node
+            from_socket = link.from_socket
+            to_socket = link.to_socket
+            if from_node is None or to_node is None:
+                continue
+            if from_socket is None or to_socket is None:
+                continue
+            from_idx = node_index.get(from_node, -1)
+            to_idx = node_index.get(to_node, -1)
+            signatures.add(
+                (
+                    from_idx,
+                    from_socket.name,
+                    to_idx,
+                    to_socket.name,
+                )
+            )
+        return signatures
+
+    links_a = get_link_signatures(group_a.links, node_index_a)
+    links_b = get_link_signatures(group_b.links, node_index_b)
+
+    return links_a == links_b
+
+
+def get_or_create_uv_map_node_group() -> bpy.types.NodeTree:
+    """Get an existing UV Map node group or create a new one.
+
+    First checks if a structurally matching "UV Map" node group already exists.
+    If found, returns that. Otherwise creates a new one.
+
+    This prevents accumulation of duplicate node groups (UV Map.001, .002, etc.)
+    when the existing one hasn't been modified by the user.
+
+    Returns:
+        Either an existing matching node group, or a newly created one.
+    """
+    base_name = UV_MAP_NODE_GROUP_PREFIX
+
+    # Check if "UV Map" already exists BEFORE creating a reference
+    existing: bpy.types.NodeTree | None = None
+    if base_name in bpy.data.node_groups:
+        existing = bpy.data.node_groups[base_name]
+
+    # Create a fresh node group (will be named "UV Map" or "UV Map.001" etc.)
+    reference_group = create_uv_map_node_group()
+
+    # If an existing group was found, check if it matches structurally
+    if existing is not None:
+        if _node_groups_match_structurally(existing, reference_group):
+            # Remove the reference group we created, use existing
+            bpy.data.node_groups.remove(reference_group)
+            return existing
+
+    # No match found, return the newly created group
+    return reference_group
+
+
 def _create_main_interface(node_tree: bpy.types.NodeTree) -> None:
     """Create the main interface sockets for the UV Map node group."""
     interface = node_tree.interface
@@ -3177,9 +3345,13 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     # Item 2 = Spherical (with normal-based switch), Item 3 = Shrink Wrap (with normal-based switch),
     # Item 4 = Box
     node_tree.links.new(planar_node.outputs["UV"], uv_switch.inputs[1])
-    node_tree.links.new(cylindrical_normal_switch.outputs["Output"], uv_switch.inputs[2])
+    node_tree.links.new(
+        cylindrical_normal_switch.outputs["Output"], uv_switch.inputs[2]
+    )
     node_tree.links.new(spherical_normal_switch.outputs["Output"], uv_switch.inputs[3])
-    node_tree.links.new(shrink_wrap_normal_switch.outputs["Output"], uv_switch.inputs[4])
+    node_tree.links.new(
+        shrink_wrap_normal_switch.outputs["Output"], uv_switch.inputs[4]
+    )
     node_tree.links.new(box_node.outputs["UV"], uv_switch.inputs[5])
 
     # UV tiling and flip chain
@@ -3349,7 +3521,9 @@ def _populate_uv_map_node_group(node_tree: bpy.types.NodeTree) -> None:  # noqa:
     gizmo_switch.active_index = 2  # type: ignore[attr-defined]
 
     # Connect gizmo menu input
-    node_tree.links.new(input_node.outputs[SOCKET_SHOW_GIZMO], gizmo_switch.inputs["Menu"])
+    node_tree.links.new(
+        input_node.outputs[SOCKET_SHOW_GIZMO], gizmo_switch.inputs["Menu"]
+    )
 
     # Connect gizmo outputs to switch
     # New order: Item 0 = None (empty), Item 1 = Position, Item 2 = Rotation, Item 3 = Size, Item 4 = All
@@ -3394,6 +3568,7 @@ def create_uv_map_node_group() -> bpy.types.NodeTree:
 
     node_tree = bpy.data.node_groups.new(name, "GeometryNodeTree")
     node_tree.use_fake_user = False  # Let it be removed when unused
+    node_tree.color_tag = "CONVERTER"  # Teal color for UV conversion
 
     # Tag the node group for identification
     node_tree[UV_MAP_NODE_GROUP_TAG] = True
@@ -3412,19 +3587,35 @@ def create_uv_map_node_group() -> bpy.types.NodeTree:
     return node_tree
 
 
-def regenerate_uv_map_node_group(  # noqa: PLR0912
+def regenerate_uv_map_node_group(  # noqa: PLR0912, PLR0915
     node_tree: bpy.types.NodeTree,
 ) -> None:
     """Regenerate an existing UV Map node group in place.
 
     Clears all nodes and the interface, then recreates them with the latest code.
-    Preserves parameter values from modifiers using this node group where possible.
+    Preserves parameter values and connections from:
+    - Modifiers using this node group directly
+    - Group nodes in other node trees that reference this node group
 
     Note: Sub-groups (Planar, Cylindrical, etc.) should be deleted by the caller
     BEFORE calling this function if a full refresh is needed. This allows multiple
     main groups to share the same freshly created sub-groups.
     """
     import contextlib
+
+    # Build socket name -> identifier mapping from current interface
+    old_socket_map: dict[str, str] = {}
+    old_output_socket_map: dict[str, str] = {}
+    interface = node_tree.interface
+    if interface is not None:
+        for item in interface.items_tree:
+            if getattr(item, "item_type", None) != "SOCKET":
+                continue
+            in_out = getattr(item, "in_out", None)
+            if in_out == "INPUT":
+                old_socket_map[item.name] = item.identifier  # type: ignore[union-attr]
+            elif in_out == "OUTPUT":
+                old_output_socket_map[item.name] = item.identifier  # type: ignore[union-attr]
 
     # Find all modifiers using this node group and save their values
     modifier_values: list[tuple[bpy.types.Modifier, dict[str, object]]] = []
@@ -3436,20 +3627,9 @@ def regenerate_uv_map_node_group(  # noqa: PLR0912
             if getattr(modifier, "node_group", None) != node_tree:
                 continue
 
-            # Build socket name -> identifier mapping from current interface
-            socket_map: dict[str, str] = {}
-            interface = node_tree.interface
-            if interface is not None:
-                for item in interface.items_tree:
-                    if getattr(item, "item_type", None) != "SOCKET":
-                        continue
-                    if getattr(item, "in_out", None) != "INPUT":
-                        continue
-                    socket_map[item.name] = item.identifier  # type: ignore[union-attr]
-
             # Save values by socket NAME (not identifier, since those will change)
             values: dict[str, object] = {}
-            for name, identifier in socket_map.items():
+            for name, identifier in old_socket_map.items():
                 value = modifier.get(identifier)
                 if value is not None:
                     # Convert to a basic type to avoid issues with Blender types
@@ -3460,8 +3640,85 @@ def regenerate_uv_map_node_group(  # noqa: PLR0912
 
             modifier_values.append((modifier, values))
 
+    # Find all group nodes in other node trees that reference this node group
+    # Save their input values and connections
+    # Type alias for group node data storage
+    group_node_data: list[
+        tuple[
+            bpy.types.Node,  # The group node
+            bpy.types.NodeTree,  # The parent node tree
+            dict[str, object],  # Input socket default values by name
+            list[tuple[str, bpy.types.Node, str]],  # Input links
+            list[tuple[str, bpy.types.Node, str]],  # Output links
+        ]
+    ] = []
+
+    for other_tree in bpy.data.node_groups:
+        if other_tree == node_tree:
+            continue
+        for node in other_tree.nodes:
+            if node.bl_idname != "GeometryNodeGroup":
+                continue
+            if getattr(node, "node_tree", None) != node_tree:
+                continue
+
+            # Save input default values
+            input_values: dict[str, object] = {}
+            for inp in node.inputs:
+                default_val = getattr(inp, "default_value", None)
+                if default_val is not None:
+                    if hasattr(default_val, "__len__") and not isinstance(
+                        default_val, str
+                    ):
+                        input_values[inp.name] = tuple(default_val)
+                    else:
+                        input_values[inp.name] = default_val
+
+            # Save input connections
+            input_links: list[tuple[str, bpy.types.Node, str]] = []
+            for link in other_tree.links:
+                if link.to_node == node:
+                    from_node = link.from_node
+                    from_socket = link.from_socket
+                    to_socket = link.to_socket
+                    if (
+                        from_node is not None
+                        and from_socket is not None
+                        and to_socket is not None
+                    ):
+                        input_links.append(
+                            (to_socket.name, from_node, from_socket.name)
+                        )
+
+            # Save output connections
+            output_links: list[tuple[str, bpy.types.Node, str]] = []
+            for link in other_tree.links:
+                if link.from_node == node:
+                    from_socket = link.from_socket
+                    to_node = link.to_node
+                    to_socket = link.to_socket
+                    if (
+                        from_socket is not None
+                        and to_node is not None
+                        and to_socket is not None
+                    ):
+                        output_links.append((from_socket.name, to_node, to_socket.name))
+
+            group_node_data.append(
+                (
+                    node,
+                    other_tree,
+                    input_values,
+                    input_links,
+                    output_links,
+                )
+            )
+
     # Clear all existing nodes
     node_tree.nodes.clear()
+
+    # Set color tag (may have been missing on older groups)
+    node_tree.color_tag = "CONVERTER"
 
     # Clear and recreate interface (to pick up any socket changes)
     interface = node_tree.interface
@@ -3477,7 +3734,6 @@ def regenerate_uv_map_node_group(  # noqa: PLR0912
     _set_mapping_type_default(node_tree)
     _set_gizmo_default(node_tree)
 
-    # Restore values to modifiers
     # Build new socket name -> identifier mapping
     new_socket_map: dict[str, str] = {}
     for item in node_tree.interface.items_tree:  # type: ignore[union-attr]
@@ -3487,6 +3743,7 @@ def regenerate_uv_map_node_group(  # noqa: PLR0912
             continue
         new_socket_map[item.name] = item.identifier  # type: ignore[union-attr]
 
+    # Restore values to modifiers
     for modifier, values in modifier_values:
         for name, value in values.items():
             if name not in new_socket_map:
@@ -3494,6 +3751,40 @@ def regenerate_uv_map_node_group(  # noqa: PLR0912
             new_identifier = new_socket_map[name]
             with contextlib.suppress(KeyError, TypeError):
                 modifier[new_identifier] = value
+
+    # Restore group node values and connections
+    for node, parent_tree, input_values, input_links, output_links in group_node_data:
+        # Restore input default values
+        for inp in node.inputs:
+            if inp.name in input_values:
+                with contextlib.suppress(AttributeError, TypeError):
+                    inp.default_value = input_values[inp.name]  # type: ignore[attr-defined]
+
+        # Restore input connections
+        for socket_name, from_node, from_socket_name in input_links:
+            # Find the socket by name on the group node
+            to_socket = node.inputs.get(socket_name)
+            if to_socket is None:
+                continue
+            # Find the source socket
+            from_socket = from_node.outputs.get(from_socket_name)
+            if from_socket is None:
+                continue
+            with contextlib.suppress(RuntimeError):
+                parent_tree.links.new(from_socket, to_socket)
+
+        # Restore output connections
+        for socket_name, to_node, to_socket_name in output_links:
+            # Find the socket by name on the group node
+            from_socket = node.outputs.get(socket_name)
+            if from_socket is None:
+                continue
+            # Find the destination socket
+            to_socket = to_node.inputs.get(to_socket_name)
+            if to_socket is None:
+                continue
+            with contextlib.suppress(RuntimeError):
+                parent_tree.links.new(from_socket, to_socket)
 
 
 def is_uv_map_node_group(node_tree: bpy.types.NodeTree | None) -> bool:
@@ -3506,6 +3797,32 @@ def is_uv_map_node_group(node_tree: bpy.types.NodeTree | None) -> bool:
 def get_uv_map_node_groups() -> list[bpy.types.NodeTree]:
     """Get all UV Map node groups in the blend file."""
     return [ng for ng in bpy.data.node_groups if is_uv_map_node_group(ng)]
+
+
+def needs_regeneration() -> bool:
+    """Check if any UV Map node groups need regeneration.
+
+    Creates a fresh reference node group and compares it structurally
+    against existing UV Map node groups. If any differ, regeneration is needed.
+
+    Returns:
+        True if regeneration is needed, False otherwise.
+    """
+    existing_groups = get_uv_map_node_groups()
+    if not existing_groups:
+        return False
+
+    # Create a fresh reference to compare against
+    reference = create_uv_map_node_group()
+
+    try:
+        for group in existing_groups:
+            if not _node_groups_match_structurally(group, reference):
+                return True
+        return False
+    finally:
+        # Always clean up the reference group
+        bpy.data.node_groups.remove(reference)
 
 
 # Classes to register (none for this module - it's utility only)
