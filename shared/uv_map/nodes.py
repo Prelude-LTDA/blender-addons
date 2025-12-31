@@ -555,7 +555,6 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     group.links.new(axis_blend_raw.outputs["Value"], axis_blend.inputs["Value"])
 
     # === Connect seam correction (BEFORE blending) ===
-    # Now using divide_node directly (no +0.5 offset)
     group.links.new(divide_node.outputs["Value"], delta_u.inputs[0])
     group.links.new(divide_face.outputs["Value"], delta_u.inputs[1])
 
@@ -769,7 +768,6 @@ def _create_cylindrical_capped_mapping_group(  # noqa: PLR0915
     group.links.new(atan2_face.outputs["Value"], divide_2pi_face.inputs[0])
 
     # === Connect seam correction ===
-    # Now using divide_2pi directly (no +0.5 offset)
     group.links.new(divide_2pi.outputs["Value"], delta_u.inputs[0])
     group.links.new(divide_2pi_face.outputs["Value"], delta_u.inputs[1])
     group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
@@ -1038,7 +1036,6 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
 
     # === Connect seam correction (BEFORE blending) ===
     # First correct corner U to be on same side of seam as face U
-    # Now using divide_2pi directly (no +0.5 offset)
     group.links.new(divide_2pi.outputs["Value"], delta_u.inputs[0])
     group.links.new(divide_2pi_face.outputs["Value"], delta_u.inputs[1])
 
@@ -1053,7 +1050,7 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     group.links.new(total_offset.outputs["Value"], corrected_corner_u.inputs[1])
 
     # === Connect pole blending (AFTER seam correction) ===
-    # Now blend the seam-corrected corner U with face U
+    # Blend the seam-corrected corner U with face U
     group.links.new(pole_blend.outputs["Result"], one_minus_blend.inputs[1])
     group.links.new(divide_2pi_face.outputs["Value"], face_u_weighted.inputs[0])
     group.links.new(one_minus_blend.outputs["Value"], face_u_weighted.inputs[1])
@@ -1762,7 +1759,6 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     group.links.new(atan2_face.outputs["Value"], divide_face.inputs[0])
 
     # === Connect seam correction ===
-    # Now using divide_node directly (no +0.5 offset)
     group.links.new(divide_node.outputs["Value"], delta_u.inputs[0])
     group.links.new(divide_face.outputs["Value"], delta_u.inputs[1])
 
@@ -1944,7 +1940,6 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
     group.links.new(atan2_face.outputs["Value"], divide_2pi_face.inputs[0])
 
     # === Connect seam correction ===
-    # Now using divide_2pi directly (no +0.5 offset)
     group.links.new(divide_2pi.outputs["Value"], delta_u.inputs[0])
     group.links.new(divide_2pi_face.outputs["Value"], delta_u.inputs[1])
     group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
@@ -2195,7 +2190,6 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     group.links.new(pole_blend_raw.outputs["Value"], pole_blend.inputs["Value"])
 
     # === Connect seam correction (BEFORE blending) ===
-    # Now using divide_2pi directly (no +0.5 offset)
     group.links.new(divide_2pi.outputs["Value"], delta_u.inputs[0])
     group.links.new(divide_2pi_face.outputs["Value"], delta_u.inputs[1])
 

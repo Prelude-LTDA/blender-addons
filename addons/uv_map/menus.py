@@ -104,5 +104,5 @@ def unregister_menus() -> None:
         _registered_swap_menu = False
 
 
-# Classes to register (none needed now since we use existing menu)
+# Classes to register (empty - uses existing Blender menus)
 classes: list[type] = []
