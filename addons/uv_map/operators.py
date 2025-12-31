@@ -400,6 +400,17 @@ def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
         if tile_id:
             params[tile_name.lower().replace(" ", "_")] = modifier.get(tile_id, 1.0)
 
+    # Offset
+    for offset_name in ["U Offset", "V Offset"]:
+        offset_id = socket_ids.get(offset_name)
+        if offset_id:
+            params[offset_name.lower().replace(" ", "_")] = modifier.get(offset_id, 0.0)
+
+    # UV Rotation
+    uv_rotation_id = socket_ids.get("UV Rotation")
+    if uv_rotation_id:
+        params["uv_rotation"] = modifier.get(uv_rotation_id, 0.0)
+
     # Flip
     for flip_name in ["U Flip", "V Flip"]:
         flip_id = socket_ids.get(flip_name)

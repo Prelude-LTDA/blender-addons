@@ -3,16 +3,25 @@ Overlay module for UV Map addon.
 
 Renders wireframe visualization of the UV map shape (plane, cylinder, sphere, box)
 in the 3D viewport when a UV Map modifier is active.
+
+Also renders UV direction indicators showing U and V axis directions as curved
+lines that follow the projection surface.
 """
 
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
+import blf
 import bpy
 import gpu
+from bpy_extras.view3d_utils import location_3d_to_region_2d
 from gpu_extras.batch import batch_for_shader
 from mathutils import Euler, Matrix, Vector
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from .constants import (
     MAPPING_BOX,
@@ -22,12 +31,25 @@ from .constants import (
     MAPPING_SPHERICAL,
     OVERLAY_COLOR,
     OVERLAY_LINE_WIDTH,
+    OVERLAY_U_DIRECTION_COLOR,
+    OVERLAY_UV_DIRECTION_LINE_WIDTH,
+    OVERLAY_V_DIRECTION_COLOR,
 )
 from .nodes import is_uv_map_node_group
 from .operators import get_uv_map_modifier_params
 
-# Draw handler reference
+# Draw handler references
 _draw_handler: object | None = None
+_text_draw_handler: object | None = None
+
+# Text label settings
+OVERLAY_LABEL_FONT_SIZE = 14
+OVERLAY_LABEL_OFFSET_X = 5  # Offset from point in screen pixels
+OVERLAY_LABEL_OFFSET_Y = 5
+
+# Cached label positions for text drawing (populated by 3D overlay, used by 2D text overlay)
+_cached_u_labels: list[tuple[float, float, float]] = []
+_cached_v_labels: list[tuple[float, float, float]] = []
 
 # Cached shader
 _shader: gpu.types.GPUShader | None = None
@@ -360,7 +382,7 @@ def _generate_sphere_vertices(
     return vertices
 
 
-def _generate_shrink_wrap_vertices(
+def _generate_shrink_wrap_vertices(  # noqa: PLR0915
     position: tuple[float, float, float],
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
@@ -578,7 +600,7 @@ def _generate_cylinder_normal_vertices(
     return vertices
 
 
-def _generate_cylinder_capped_normal_vertices(
+def _generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
     segments: int = 32,
@@ -950,8 +972,1157 @@ def _generate_shrink_wrap_normal_vertices(  # noqa: PLR0915
     return vertices
 
 
+# =============================================================================
+# UV Direction Overlay Functions
+# =============================================================================
+# These functions generate curved lines showing U and V directions on the
+# projection surface. The lines start at UV (0, 0) and extend to (1, 0) for U
+# and (0, 1) for V, following the curvature of each projection type.
+#
+# The inverse functions take final UV coordinates (after all processing) and
+# convert them back to 3D positions on the projection surface.
+
+
+def _compute_adaptive_segments(u_tile: float, v_tile: float, base_segments: int) -> int:
+    """Compute number of segments based on UV tiling.
+
+    Lower tiling values mean longer lines that may wrap around the shape
+    multiple times, requiring more segments to look smooth.
+    """
+    # More segments for lower tile values (longer lines)
+    min_tile = min(u_tile, v_tile)
+    min_tile = max(min_tile, 0.001)
+
+    # Scale segments inversely with tile value
+    # At tile=1, use base segments
+    # At tile=0.1, use 10x base segments
+    # At tile=0.01, use 100x base segments (capped)
+    multiplier = max(1.0, 1.0 / min_tile)
+    segments = int(base_segments * min(multiplier, 50.0))  # Cap at 50x
+
+    return max(base_segments, min(segments, base_segments * 50))
+
+
+def _inverse_uv_planar(
+    u: float,
+    v: float,
+    u_tile: float,
+    v_tile: float,
+    u_offset: float,
+    v_offset: float,
+    uv_rotation: float,
+    u_flip: bool,
+    v_flip: bool,
+) -> Vector:
+    """Convert UV coordinates back to 3D position for planar mapping.
+
+    Forward chain: raw_uv -> tile -> rotate -> flip -> offset -> final_uv
+    Reverse chain: final_uv -> un-offset -> un-flip -> un-rotate -> un-tile -> raw_uv
+    Then: raw_uv -> 3D position
+
+    Planar formula: U = x * 0.5, V = y * 0.5
+    Inverse: x = U * 2, y = V * 2, z = 0
+    """
+    # 1. Remove offset
+    u1 = u - u_offset
+    v1 = v - v_offset
+
+    # 2. Reverse flip (flip formula is: tile - value)
+    if u_flip:
+        u1 = u_tile - u1
+    if v_flip:
+        v1 = v_tile - v1
+
+    # 3. Reverse rotation (apply negative rotation)
+    cos_r = math.cos(-uv_rotation)
+    sin_r = math.sin(-uv_rotation)
+    u2 = u1 * cos_r - v1 * sin_r
+    v2 = u1 * sin_r + v1 * cos_r
+
+    # 4. Reverse tiling
+    u_raw = u2 / u_tile if u_tile != 0 else u2
+    v_raw = v2 / v_tile if v_tile != 0 else v2
+
+    # 5. Reverse mapping formula (Planar: U = x * 0.5, V = y * 0.5)
+    x = u_raw * 2.0
+    y = v_raw * 2.0
+    z = 0.0
+
+    return Vector((x, y, z))
+
+
+def _inverse_uv_cylindrical(
+    u: float,
+    v: float,
+    u_tile: float,
+    v_tile: float,
+    u_offset: float,
+    v_offset: float,
+    uv_rotation: float,
+    u_flip: bool,
+    v_flip: bool,
+) -> Vector:
+    """Convert UV coordinates back to 3D position for cylindrical mapping.
+
+    The cylindrical mapping uses:
+    - U: angle around Z axis (one full rotation per U unit, before tiling)
+    - V: height along Z axis
+
+    Internal scale: -4x on U (so U=0.25 = one rotation), 0.75x on V
+    """
+    # Reverse UV processing chain
+    u1 = u - u_offset
+    v1 = v - v_offset
+
+    if u_flip:
+        u1 = u_tile - u1
+    if v_flip:
+        v1 = v_tile - v1
+
+    cos_r = math.cos(-uv_rotation)
+    sin_r = math.sin(-uv_rotation)
+    u2 = u1 * cos_r - v1 * sin_r
+    v2 = u1 * sin_r + v1 * cos_r
+
+    u_raw = u2 / u_tile if u_tile != 0 else u2
+    v_raw = v2 / v_tile if v_tile != 0 else v2
+
+    # Convert to rotation fraction (0-1 = full rotation)
+    # Internal scale is -4, so U_raw=1 means -0.25 rotations = +0.75 rotations
+    u_frac = -u_raw / 4.0
+
+    # Cylindrical coordinates
+    # U fraction -> angle theta (0 to 2π for full rotation)
+    theta = u_frac * 2.0 * math.pi
+
+    x = math.sin(theta)
+    y = math.cos(theta)
+    # V has internal scale of 0.75, so reverse it
+    z = v_raw / 0.75
+
+    return Vector((x, y, z))
+
+
+def _inverse_uv_spherical(
+    u: float,
+    v: float,
+    u_tile: float,
+    v_tile: float,
+    u_offset: float,
+    v_offset: float,
+    uv_rotation: float,
+    u_flip: bool,
+    v_flip: bool,
+) -> Vector:
+    """Convert UV coordinates back to 3D position for spherical mapping.
+
+    The spherical mapping in nodes.py uses:
+    - U: atan2(x,y) / 2π, then scaled by -4
+    - V: (acos(z/length) / π - 0.5), then scaled by -2
+
+    The -0.5 offset centers V=0 at the equator:
+    - V=0 → equator (z=0)
+    - V>0 → northern hemisphere
+    - V<0 → southern hemisphere
+
+    Inverse:
+        atan2(x,y) = U_output * π / (-2) = -U_output * π / 2
+        acos(z_norm) = (V_output / (-2) + 0.5) * π = -V_output * π / 2 + π/2
+        z_norm = cos(-V_output * π / 2 + π/2) = sin(V_output * π / 2)
+    """
+    # Reverse UV processing chain
+    u1 = u - u_offset
+    v1 = v - v_offset
+
+    if u_flip:
+        u1 = u_tile - u1
+    if v_flip:
+        v1 = v_tile - v1
+
+    cos_r = math.cos(-uv_rotation)
+    sin_r = math.sin(-uv_rotation)
+    u2 = u1 * cos_r - v1 * sin_r
+    v2 = u1 * sin_r + v1 * cos_r
+
+    u_raw = u2 / u_tile if u_tile != 0 else u2
+    v_raw = v2 / v_tile if v_tile != 0 else v2
+
+    # Reverse the spherical mapping
+    # atan2(x,y) = -u_raw * π / 2 (after accounting for -4x scale)
+    phi = -u_raw * math.pi / 2.0
+
+    # With equator offset: V_raw = (-2) * (acos(z_norm)/π - 0.5)
+    # Solving: acos(z_norm) = π * (0.5 - V_raw/2)
+    # z_norm = cos(π * (0.5 - V_raw/2)) = cos(π/2 - V_raw*π/2) = sin(V_raw*π/2)
+    # theta (polar angle from +Z) = acos(z_norm) = π/2 - V_raw*π/2
+    theta = math.pi / 2.0 - v_raw * math.pi / 2.0
+    theta = max(0.0, min(math.pi, theta))  # Clamp to valid range
+
+    # The theta here is the polar angle from +Z axis
+    # sin(theta) gives the xy-plane distance, cos(theta) gives z
+    z = math.cos(theta)
+    xy_radius = math.sin(theta)
+
+    # phi is atan2(x, y), so x = r*sin(phi), y = r*cos(phi)
+    x = xy_radius * math.sin(phi)
+    y = xy_radius * math.cos(phi)
+
+    return Vector((x, y, z))
+
+
+def _inverse_uv_shrink_wrap(
+    u: float,
+    v: float,
+    u_tile: float,
+    v_tile: float,
+    u_offset: float,
+    v_offset: float,
+    uv_rotation: float,
+    u_flip: bool,
+    v_flip: bool,
+) -> Vector:
+    """Convert UV coordinates back to 3D position for shrink wrap mapping.
+
+    Shrink wrap (azimuthal equidistant) formula:
+    theta = acos(z / length)
+    phi = atan2(y, x)
+    r = theta / π
+    U = r * cos(phi), V = r * sin(phi)
+
+    Inverse:
+    r = sqrt(U² + V²)
+    phi = atan2(V, U)
+    theta = r * π
+    x = sin(theta) * cos(phi), y = sin(theta) * sin(phi), z = cos(theta)
+    """
+    # Reverse UV processing chain
+    u1 = u - u_offset
+    v1 = v - v_offset
+
+    if u_flip:
+        u1 = u_tile - u1
+    if v_flip:
+        v1 = v_tile - v1
+
+    cos_r = math.cos(-uv_rotation)
+    sin_r = math.sin(-uv_rotation)
+    u2 = u1 * cos_r - v1 * sin_r
+    v2 = u1 * sin_r + v1 * cos_r
+
+    u_raw = u2 / u_tile if u_tile != 0 else u2
+    v_raw = v2 / v_tile if v_tile != 0 else v2
+
+    # Reverse shrink wrap mapping
+    r = math.sqrt(u_raw * u_raw + v_raw * v_raw)
+
+    if r < 1e-6:
+        return Vector((0.0, 0.0, 1.0))
+
+    phi = math.atan2(v_raw, u_raw)
+    theta = r * math.pi
+
+    # Clamp theta
+    theta = min(theta, math.pi)
+
+    x = math.sin(theta) * math.cos(phi)
+    y = math.sin(theta) * math.sin(phi)
+    z = math.cos(theta)
+
+    return Vector((x, y, z))
+
+
+def _generate_uv_direction_line(
+    inverse_func: Callable[
+        [float, float, float, float, float, float, float, bool, bool], Vector
+    ],
+    u_start: float,
+    v_start: float,
+    u_end: float,
+    v_end: float,
+    segments: int,
+    u_tile: float,
+    v_tile: float,
+    u_offset: float,
+    v_offset: float,
+    uv_rotation: float,
+    u_flip: bool,
+    v_flip: bool,
+    transform: Matrix,
+    dashed: bool = False,
+) -> tuple[list[tuple[float, float, float]], tuple[float, float, float]]:
+    """Generate a curved line in 3D space by sampling UV coordinates.
+
+    Args:
+        inverse_func: Function that converts UV to 3D position
+        u_start, v_start: Starting UV coordinates
+        u_end, v_end: Ending UV coordinates
+        segments: Number of line segments
+        transform: World transform matrix to apply
+        dashed: If True, generate dashed line (every other segment)
+        ... UV processing parameters
+
+    Returns:
+        Tuple of (vertex list for LINES primitive, endpoint position for label)
+    """
+    vertices: list[tuple[float, float, float]] = []
+    endpoint: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    # For dashed lines, use more segments to create finer dashes
+    if dashed:
+        segments = segments * 2  # 2x more segments for finer dashes
+
+    for i in range(segments):
+        # For dashed lines, skip every other segment
+        if dashed and i % 2 == 1:
+            # Still need to track the endpoint
+            if i == segments - 1:
+                t2 = (i + 1) / segments
+                u2 = u_start + (u_end - u_start) * t2
+                v2 = v_start + (v_end - v_start) * t2
+                p2 = inverse_func(
+                    u2,
+                    v2,
+                    u_tile,
+                    v_tile,
+                    u_offset,
+                    v_offset,
+                    uv_rotation,
+                    u_flip,
+                    v_flip,
+                )
+                t2_vec = transform @ p2
+                endpoint = (t2_vec.x, t2_vec.y, t2_vec.z)
+            continue
+
+        t1 = i / segments
+        t2 = (i + 1) / segments
+
+        u1 = u_start + (u_end - u_start) * t1
+        v1 = v_start + (v_end - v_start) * t1
+        u2 = u_start + (u_end - u_start) * t2
+        v2 = v_start + (v_end - v_start) * t2
+
+        p1 = inverse_func(
+            u1, v1, u_tile, v_tile, u_offset, v_offset, uv_rotation, u_flip, v_flip
+        )
+        p2 = inverse_func(
+            u2, v2, u_tile, v_tile, u_offset, v_offset, uv_rotation, u_flip, v_flip
+        )
+
+        t1_vec = transform @ p1
+        t2_vec = transform @ p2
+
+        vertices.append((t1_vec.x, t1_vec.y, t1_vec.z))
+        vertices.append((t2_vec.x, t2_vec.y, t2_vec.z))
+
+        # Store the last endpoint for label positioning
+        if i == segments - 1:
+            endpoint = (t2_vec.x, t2_vec.y, t2_vec.z)
+
+    return vertices, endpoint
+
+
+def _generate_uv_direction_vertices(  # noqa: PLR0915
+    mapping_type: str,
+    position: tuple[float, float, float],
+    rotation: tuple[float, float, float],
+    size: tuple[float, float, float],
+    u_tile: float,
+    v_tile: float,
+    u_offset: float,
+    v_offset: float,
+    uv_rotation: float,
+    u_flip: bool,
+    v_flip: bool,
+    cap: bool = False,
+) -> tuple[
+    list[tuple[float, float, float]],
+    list[tuple[float, float, float]],
+    list[tuple[float, float, float]],
+    list[tuple[float, float, float]],
+    list[tuple[float, float, float]],
+    list[tuple[float, float, float]],
+]:
+    """Generate UV direction indicator vertices for a given mapping type.
+
+    Returns six lists:
+    - U direction line vertices (for LINES primitive)
+    - V direction line vertices (for LINES primitive)
+    - U projected line vertices (dashed, from V endpoint in U direction)
+    - V projected line vertices (dashed, from U endpoint in V direction)
+    - U label positions (endpoint of each U line)
+    - V label positions (endpoint of each V line)
+
+    For planar/cylindrical/spherical/shrink_wrap: returns one U and one V line
+    For cylindrical capped: returns lines for side + top/bottom caps
+    For box: returns lines for each face projection
+    """
+    pos_vec = Vector(position)
+    rot_euler = Euler(rotation, "XYZ")
+    scale_vec = Vector(size)
+
+    # Build TRS transform matrix
+    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    transform = (
+        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+    )
+
+    # Adaptive segments based on tiling (more segments for longer lines)
+    base_segments = 16
+    segments = _compute_adaptive_segments(u_tile, v_tile, base_segments)
+
+    u_vertices: list[tuple[float, float, float]] = []
+    v_vertices: list[tuple[float, float, float]] = []
+    u_proj_vertices: list[tuple[float, float, float]] = []
+    v_proj_vertices: list[tuple[float, float, float]] = []
+    u_labels: list[tuple[float, float, float]] = []
+    v_labels: list[tuple[float, float, float]] = []
+
+    if mapping_type == MAPPING_PLANAR:
+        # Planar: simple straight lines from (0,0) to (1,0) and (0,0) to (0,1)
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        u_vertices.extend(verts)
+        u_labels.append(endpoint)
+
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        v_vertices.extend(verts)
+        v_labels.append(endpoint)
+
+        # Projected lines (dashed) to complete the parallelogram
+        # U projection: from V endpoint (0,1) in U direction to (1,1)
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        u_proj_vertices.extend(verts)
+
+        # V projection: from U endpoint (1,0) in V direction to (1,1)
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        v_proj_vertices.extend(verts)
+
+    elif mapping_type == MAPPING_CYLINDRICAL:
+        if cap:
+            # Capped cylinder: side + top + bottom projections
+            # Side projection (cylindrical)
+            verts, endpoint = _generate_uv_direction_line(
+                _inverse_uv_cylindrical,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                segments * 2,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                transform,
+            )
+            u_vertices.extend(verts)
+            u_labels.append(endpoint)
+
+            verts, endpoint = _generate_uv_direction_line(
+                _inverse_uv_cylindrical,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                segments,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                transform,
+            )
+            v_vertices.extend(verts)
+            v_labels.append(endpoint)
+
+            # Projected lines (dashed) for capped cylinder side
+            # U projection: from V endpoint (0,1) in U direction to (1,1)
+            verts, _ = _generate_uv_direction_line(
+                _inverse_uv_cylindrical,
+                0.0,
+                1.0,
+                1.0,
+                1.0,
+                segments * 2,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                transform,
+                dashed=True,
+            )
+            u_proj_vertices.extend(verts)
+
+            # V projection: from U endpoint (1,0) in V direction to (1,1)
+            verts, _ = _generate_uv_direction_line(
+                _inverse_uv_cylindrical,
+                1.0,
+                0.0,
+                1.0,
+                1.0,
+                segments,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                transform,
+                dashed=True,
+            )
+            v_proj_vertices.extend(verts)
+
+            # Cap indicator at z=+1 (top only) using planar mapping
+            for cap_z in [1.0]:
+                cap_offset = Matrix.Translation(Vector((0, 0, cap_z)))
+                cap_scale = Matrix.Diagonal(Vector((1.0, 1.0, 0.0, 1.0)))
+                cap_xform = transform @ cap_offset @ cap_scale
+
+                verts, endpoint = _generate_uv_direction_line(
+                    _inverse_uv_planar,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    segments,
+                    u_tile,
+                    v_tile,
+                    u_offset,
+                    v_offset,
+                    uv_rotation,
+                    u_flip,
+                    v_flip,
+                    cap_xform,
+                )
+                u_vertices.extend(verts)
+                u_labels.append(endpoint)
+
+                verts, endpoint = _generate_uv_direction_line(
+                    _inverse_uv_planar,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    segments,
+                    u_tile,
+                    v_tile,
+                    u_offset,
+                    v_offset,
+                    uv_rotation,
+                    u_flip,
+                    v_flip,
+                    cap_xform,
+                )
+                v_vertices.extend(verts)
+                v_labels.append(endpoint)
+
+                # Cap projected lines
+                verts, _ = _generate_uv_direction_line(
+                    _inverse_uv_planar,
+                    0.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                    segments,
+                    u_tile,
+                    v_tile,
+                    u_offset,
+                    v_offset,
+                    uv_rotation,
+                    u_flip,
+                    v_flip,
+                    cap_xform,
+                    dashed=True,
+                )
+                u_proj_vertices.extend(verts)
+                verts, _ = _generate_uv_direction_line(
+                    _inverse_uv_planar,
+                    1.0,
+                    0.0,
+                    1.0,
+                    1.0,
+                    segments,
+                    u_tile,
+                    v_tile,
+                    u_offset,
+                    v_offset,
+                    uv_rotation,
+                    u_flip,
+                    v_flip,
+                    cap_xform,
+                    dashed=True,
+                )
+                v_proj_vertices.extend(verts)
+        else:
+            # Regular cylinder: curved U line around circumference
+            verts, endpoint = _generate_uv_direction_line(
+                _inverse_uv_cylindrical,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                segments * 2,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                transform,
+            )
+            u_vertices.extend(verts)
+            u_labels.append(endpoint)
+
+            verts, endpoint = _generate_uv_direction_line(
+                _inverse_uv_cylindrical,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                segments,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                transform,
+            )
+            v_vertices.extend(verts)
+            v_labels.append(endpoint)
+
+            # Projected lines (dashed) for regular cylinder
+            # U projection: from V endpoint (0,1) in U direction to (1,1)
+            verts, _ = _generate_uv_direction_line(
+                _inverse_uv_cylindrical,
+                0.0,
+                1.0,
+                1.0,
+                1.0,
+                segments * 2,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                transform,
+                dashed=True,
+            )
+            u_proj_vertices.extend(verts)
+
+            # V projection: from U endpoint (1,0) in V direction to (1,1)
+            verts, _ = _generate_uv_direction_line(
+                _inverse_uv_cylindrical,
+                1.0,
+                0.0,
+                1.0,
+                1.0,
+                segments,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                transform,
+                dashed=True,
+            )
+            v_proj_vertices.extend(verts)
+
+    elif mapping_type == MAPPING_SPHERICAL:
+        # Spherical: curved lines at the equator to avoid pole singularity
+        # With equator-centered coordinates: V=0 is equator in output space
+        # V>0 is northern hemisphere, V<0 is southern hemisphere
+        # Pass raw UV coordinates (0-1 range), tiling is handled by inverse function
+        v_equator = 0.0
+        v_north = 1.0  # One unit toward north pole
+
+        # U line at equator going around
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_spherical,
+            0.0,
+            v_equator,
+            1.0,
+            v_equator,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        u_vertices.extend(verts)
+        u_labels.append(endpoint)
+
+        # V line at U=0 going from equator toward north pole
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_spherical,
+            0.0,
+            v_equator,
+            0.0,
+            v_north,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        v_vertices.extend(verts)
+        v_labels.append(endpoint)
+
+        # Projected lines (dashed) for spherical
+        # U projection: from V endpoint in U direction
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_spherical,
+            0.0,
+            v_north,
+            1.0,
+            v_north,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        u_proj_vertices.extend(verts)
+
+        # V projection: from U endpoint in V direction
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_spherical,
+            1.0,
+            v_equator,
+            1.0,
+            v_north,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        v_proj_vertices.extend(verts)
+
+    elif mapping_type == MAPPING_SHRINK_WRAP:
+        # Shrink wrap: radial projection from center
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_shrink_wrap,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        u_vertices.extend(verts)
+        u_labels.append(endpoint)
+
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_shrink_wrap,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        v_vertices.extend(verts)
+        v_labels.append(endpoint)
+
+        # Projected lines (dashed) for shrink wrap
+        # U projection: from V endpoint (0,1) in U direction to (1,1)
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_shrink_wrap,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        u_proj_vertices.extend(verts)
+
+        # V projection: from U endpoint (1,0) in V direction to (1,1)
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_shrink_wrap,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        v_proj_vertices.extend(verts)
+
+    elif mapping_type == MAPPING_BOX:
+        # Box: show UV directions on each of the 3 positive faces
+        # Each face is at +1 on its axis, using planar projection
+
+        # +Z face (top): at z=+1, projects XY
+        z_face_offset = Matrix.Translation(Vector((0, 0, 1)))
+        z_transform = transform @ z_face_offset
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            z_transform,
+        )
+        u_vertices.extend(verts)
+        u_labels.append(endpoint)
+
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            z_transform,
+        )
+        v_vertices.extend(verts)
+        v_labels.append(endpoint)
+
+        # Z face projected lines
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            z_transform,
+            dashed=True,
+        )
+        u_proj_vertices.extend(verts)
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            z_transform,
+            dashed=True,
+        )
+        v_proj_vertices.extend(verts)
+
+        # +X face: at x=+1, projects YZ (rotate -90° around Y to align Z->X)
+        x_rot = Euler((0, -math.pi / 2, 0), "XYZ").to_matrix().to_4x4()
+        x_face_offset = Matrix.Translation(Vector((1, 0, 0)))
+        x_transform = transform @ x_face_offset @ x_rot
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            x_transform,
+        )
+        u_vertices.extend(verts)
+        u_labels.append(endpoint)
+
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            x_transform,
+        )
+        v_vertices.extend(verts)
+        v_labels.append(endpoint)
+
+        # X face projected lines
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            x_transform,
+            dashed=True,
+        )
+        u_proj_vertices.extend(verts)
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            x_transform,
+            dashed=True,
+        )
+        v_proj_vertices.extend(verts)
+
+        # +Y face: at y=+1, projects XZ (rotate +90° around X to align Z->Y)
+        y_rot = Euler((math.pi / 2, 0, 0), "XYZ").to_matrix().to_4x4()
+        y_face_offset = Matrix.Translation(Vector((0, 1, 0)))
+        y_transform = transform @ y_face_offset @ y_rot
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            y_transform,
+        )
+        u_vertices.extend(verts)
+        u_labels.append(endpoint)
+
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            y_transform,
+        )
+        v_vertices.extend(verts)
+        v_labels.append(endpoint)
+
+        # Y face projected lines
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            y_transform,
+            dashed=True,
+        )
+        u_proj_vertices.extend(verts)
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_planar,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            y_transform,
+            dashed=True,
+        )
+        v_proj_vertices.extend(verts)
+
+    return u_vertices, v_vertices, u_proj_vertices, v_proj_vertices, u_labels, v_labels
+
+
 def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
     """Draw the UV map shape overlay in the 3D viewport."""
+    global _cached_u_labels, _cached_v_labels  # noqa: PLW0603
     context = bpy.context
 
     # Check if we're in the 3D viewport
@@ -986,6 +2157,15 @@ def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
     position = params.get("position", (0.0, 0.0, 0.0))
     rotation = params.get("rotation", (0.0, 0.0, 0.0))
     size = params.get("size", (1.0, 1.0, 1.0))
+
+    # UV processing parameters
+    u_tile = float(params.get("u_tile", 1.0))  # type: ignore[arg-type]
+    v_tile = float(params.get("v_tile", 1.0))  # type: ignore[arg-type]
+    u_offset = float(params.get("u_offset", 0.0))  # type: ignore[arg-type]
+    v_offset = float(params.get("v_offset", 0.0))  # type: ignore[arg-type]
+    uv_rot = float(params.get("uv_rotation", 0.0))  # type: ignore[arg-type]
+    u_flip = bool(params.get("u_flip", False))
+    v_flip = bool(params.get("v_flip", False))
 
     # Ensure tuples
     if not isinstance(position, tuple):
@@ -1132,26 +2312,148 @@ def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
     shader.uniform_float("color", OVERLAY_COLOR)
     batch.draw(shader)
 
+    # Draw UV direction indicators (yellow lines showing U and V axes)
+    # Skip for normal-based mappings as position is irrelevant there
+    if not normal_based:
+        (
+            u_dir_vertices,
+            v_dir_vertices,
+            u_proj_vertices,
+            v_proj_vertices,
+            u_labels,
+            v_labels,
+        ) = _generate_uv_direction_vertices(
+            mapping_type,
+            (world_position.x, world_position.y, world_position.z),
+            combined_rotation,
+            world_size,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rot,
+            u_flip,
+            v_flip,
+            cap,
+        )
+
+        # Draw U direction line (yellow)
+        if u_dir_vertices:
+            u_batch = batch_for_shader(shader, "LINES", {"pos": u_dir_vertices})
+            shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH)
+            shader.uniform_float("color", OVERLAY_U_DIRECTION_COLOR)
+            u_batch.draw(shader)
+
+        # Draw V direction line (yellow-green)
+        if v_dir_vertices:
+            v_batch = batch_for_shader(shader, "LINES", {"pos": v_dir_vertices})
+            shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH)
+            shader.uniform_float("color", OVERLAY_V_DIRECTION_COLOR)
+            v_batch.draw(shader)
+
+        # Draw projected U line (dashed, same color as U but thinner)
+        if u_proj_vertices:
+            u_proj_batch = batch_for_shader(shader, "LINES", {"pos": u_proj_vertices})
+            shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH * 0.7)
+            shader.uniform_float("color", OVERLAY_U_DIRECTION_COLOR)
+            u_proj_batch.draw(shader)
+
+        # Draw projected V line (dashed, same color as V but thinner)
+        if v_proj_vertices:
+            v_proj_batch = batch_for_shader(shader, "LINES", {"pos": v_proj_vertices})
+            shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH * 0.7)
+            shader.uniform_float("color", OVERLAY_V_DIRECTION_COLOR)
+            v_proj_batch.draw(shader)
+
+        # Cache label positions for the text drawing handler
+        _cached_u_labels = u_labels
+        _cached_v_labels = v_labels
+    else:
+        # Clear cached labels for normal-based mappings
+        _cached_u_labels = []
+        _cached_v_labels = []
+
     # Restore state
     gpu.state.blend_set("NONE")
     gpu.state.depth_mask_set(True)
 
 
+def _draw_text_overlay() -> None:
+    """Draw U and V text labels in screen space (POST_PIXEL handler)."""
+    context = bpy.context
+
+    # Check if we're in the 3D viewport
+    if context.area is None or context.area.type != "VIEW_3D":
+        return
+
+    # Get region data for 3D to 2D conversion
+    region = context.region
+    rv3d = context.region_data
+    if region is None or rv3d is None:
+        return
+
+    # Check if there are any labels to draw
+    if not _cached_u_labels and not _cached_v_labels:
+        return
+
+    # Set up blf font
+    font_id = 0
+    blf.size(font_id, OVERLAY_LABEL_FONT_SIZE)
+    blf.enable(font_id, blf.SHADOW)
+    blf.shadow(font_id, 3, 0.0, 0.0, 0.0, 0.7)  # Dark shadow for readability
+    blf.shadow_offset(font_id, 1, -1)
+
+    # Draw U labels
+    for pos_3d in _cached_u_labels:
+        pos_2d = location_3d_to_region_2d(region, rv3d, Vector(pos_3d))
+        if pos_2d is not None:
+            blf.position(
+                font_id,
+                pos_2d.x + OVERLAY_LABEL_OFFSET_X,
+                pos_2d.y + OVERLAY_LABEL_OFFSET_Y,
+                0,
+            )
+            blf.color(font_id, *OVERLAY_U_DIRECTION_COLOR)
+            blf.draw(font_id, "U")
+
+    # Draw V labels
+    for pos_3d in _cached_v_labels:
+        pos_2d = location_3d_to_region_2d(region, rv3d, Vector(pos_3d))
+        if pos_2d is not None:
+            blf.position(
+                font_id,
+                pos_2d.x + OVERLAY_LABEL_OFFSET_X,
+                pos_2d.y + OVERLAY_LABEL_OFFSET_Y,
+                0,
+            )
+            blf.color(font_id, *OVERLAY_V_DIRECTION_COLOR)
+            blf.draw(font_id, "V")
+
+    blf.disable(font_id, blf.SHADOW)
+
+
 def register_draw_handler() -> None:
-    """Register the overlay draw handler."""
-    global _draw_handler  # noqa: PLW0603
+    """Register the overlay draw handlers."""
+    global _draw_handler, _text_draw_handler  # noqa: PLW0603
     if _draw_handler is None:
         _draw_handler = bpy.types.SpaceView3D.draw_handler_add(
             _draw_overlay, (), "WINDOW", "POST_VIEW"
         )
+    if _text_draw_handler is None:
+        _text_draw_handler = bpy.types.SpaceView3D.draw_handler_add(
+            _draw_text_overlay, (), "WINDOW", "POST_PIXEL"
+        )
 
 
 def unregister_draw_handler() -> None:
-    """Unregister the overlay draw handler."""
-    global _draw_handler  # noqa: PLW0603
+    """Unregister the overlay draw handlers."""
+    global _draw_handler, _text_draw_handler  # noqa: PLW0603
     if _draw_handler is not None:
         bpy.types.SpaceView3D.draw_handler_remove(_draw_handler, "WINDOW")
         _draw_handler = None
+    if _text_draw_handler is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(_text_draw_handler, "WINDOW")
+        _text_draw_handler = None
 
 
 # Classes to register (none for this module)

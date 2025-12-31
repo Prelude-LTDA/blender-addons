@@ -65,11 +65,11 @@ def _node_groups_match_structurally(
     - Interface sockets (names, types, directions)
     - Node types and counts
     - Link connections (from/to socket names and node indices)
+    - Default values on unconnected input sockets
 
     Does NOT compare:
     - Node positions/locations
     - Node labels (only types matter)
-    - Default values on sockets
     - Custom properties
 
     Args:
@@ -122,9 +122,9 @@ def _node_groups_match_structurally(
         return False
 
     # Build node type signatures (sorted to handle reordering)
-    def get_node_signature(node: bpy.types.Node) -> tuple[str, str | None]:
+    def get_node_signature(node: bpy.types.Node) -> tuple[str, str]:
         """Get a signature for a node: (bl_idname, node_tree_name for groups)."""
-        node_tree_name: str | None = None
+        node_tree_name = ""
         node_tree = getattr(node, "node_tree", None)
         if node_tree is not None:
             node_tree_name = node_tree.name
@@ -135,6 +135,16 @@ def _node_groups_match_structurally(
 
     if sigs_a != sigs_b:
         return False
+
+    # Recursively compare nested node groups
+    nested_a = [getattr(n, "node_tree", None) for n in nodes_a]
+    nested_b = [getattr(n, "node_tree", None) for n in nodes_b]
+    nested_a = sorted((nt for nt in nested_a if nt is not None), key=lambda x: x.name)
+    nested_b = sorted((nt for nt in nested_b if nt is not None), key=lambda x: x.name)
+
+    for nt_a, nt_b in zip(nested_a, nested_b, strict=False):
+        if not _node_groups_match_structurally(nt_a, nt_b):
+            return False
 
     # Compare links (connections)
     # Build a node -> index map for consistent comparison
@@ -189,7 +199,63 @@ def _node_groups_match_structurally(
     links_a = get_link_signatures(group_a.links, node_index_a)
     links_b = get_link_signatures(group_b.links, node_index_b)
 
-    return links_a == links_b
+    if links_a != links_b:
+        return False
+
+    # Compare default values on unconnected input sockets
+    # Get set of connected input sockets for each group
+    def get_connected_inputs(
+        links: bpy.types.NodeLinks,
+    ) -> set[tuple[bpy.types.Node, str]]:
+        """Get set of (node, socket_name) for connected input sockets."""
+        connected: set[tuple[bpy.types.Node, str]] = set()
+        for link in links:
+            to_node = link.to_node
+            to_socket = link.to_socket
+            if to_node is not None and to_socket is not None:
+                connected.add((to_node, to_socket.name))
+        return connected
+
+    connected_a = get_connected_inputs(group_a.links)
+    connected_b = get_connected_inputs(group_b.links)
+
+    # Extract default value from a socket (handles various socket types)
+    def get_socket_default_value(socket: bpy.types.NodeSocket) -> object:
+        """Extract the default value from a socket, returning a comparable type."""
+        val = getattr(socket, "default_value", None)
+        if val is None:
+            return None
+        # Convert Blender types to Python types for comparison
+        if hasattr(val, "__iter__") and not isinstance(val, str):
+            # Vector, Color, etc. - convert to tuple
+            return tuple(val)
+        return val
+
+    # Build default value signatures for each group
+    # Signature: (node_index, socket_name, default_value)
+    def get_default_value_signatures(
+        nodes: list[bpy.types.Node],
+        node_index: dict[bpy.types.Node, int],
+        connected: set[tuple[bpy.types.Node, str]],
+    ) -> set[tuple[int, str, object]]:
+        """Get set of (node_index, socket_name, default_value) for unconnected inputs."""
+        signatures: set[tuple[int, str, object]] = set()
+        for node in nodes:
+            idx = node_index.get(node, -1)
+            for inp in node.inputs:
+                # Skip connected sockets - their values don't matter
+                if (node, inp.name) in connected:
+                    continue
+                # Get the default value
+                default_val = get_socket_default_value(inp)
+                if default_val is not None:
+                    signatures.add((idx, inp.name, default_val))
+        return signatures
+
+    defaults_a = get_default_value_signatures(sorted_nodes_a, node_index_a, connected_a)
+    defaults_b = get_default_value_signatures(sorted_nodes_b, node_index_b, connected_b)
+
+    return defaults_a == defaults_b
 
 
 def get_or_create_uv_map_node_group() -> bpy.types.NodeTree:
@@ -541,7 +607,8 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     corner_r.operation = "SQRT"  # type: ignore[attr-defined]
     corner_r.label = "Corner R"
 
-    # Corner U = atan2(x, y) / (2*pi) + 0.5
+    # Corner U = atan2(x, y) / (2*pi)
+    # No offset so that U=0 is at +Y direction, matching overlay
     atan2_node = group.nodes.new("ShaderNodeMath")
     atan2_node.operation = "ARCTAN2"  # type: ignore[attr-defined]
     atan2_node.label = "atan2(X, Y)"
@@ -549,12 +616,7 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     divide_node = group.nodes.new("ShaderNodeMath")
     divide_node.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_node.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_node.label = "/ 2π"
-
-    add_node = group.nodes.new("ShaderNodeMath")
-    add_node.operation = "ADD"  # type: ignore[attr-defined]
-    add_node.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_node.label = "+ 0.5 (Corner U)"
+    divide_node.label = "/ 2π (Corner U)"
 
     # === Face center processing ===
     separate_face = group.nodes.new("ShaderNodeSeparateXYZ")
@@ -568,12 +630,7 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     divide_face = group.nodes.new("ShaderNodeMath")
     divide_face.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_face.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_face.label = "/ 2π Face"
-
-    add_face = group.nodes.new("ShaderNodeMath")
-    add_face.operation = "ADD"  # type: ignore[attr-defined]
-    add_face.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_face.label = "+ 0.5 (Face U)"
+    divide_face.label = "/ 2π (Face U)"
 
     # === Axis blending (like pole blending in spherical) ===
     # Blend towards face U when corner is near the axis
@@ -643,6 +700,12 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     scale_u.inputs[1].default_value = -4.0  # type: ignore[index]
     scale_u.label = "Scale U (-4x)"
 
+    # Internal scale factor for V (0.75x for better aspect ratio)
+    scale_v = group.nodes.new("ShaderNodeMath")
+    scale_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_v.inputs[1].default_value = 0.75  # type: ignore[index]
+    scale_v.label = "Scale V (0.75x)"
+
     combine_xyz = group.nodes.new("ShaderNodeCombineXYZ")
     combine_xyz.label = "Combine UV"
 
@@ -662,14 +725,12 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
     group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
     group.links.new(atan2_node.outputs["Value"], divide_node.inputs[0])
-    group.links.new(divide_node.outputs["Value"], add_node.inputs[0])
 
     # === Connect face processing ===
     group.links.new(input_node.outputs["Face Position"], separate_face.inputs["Vector"])
     group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
     group.links.new(separate_face.outputs["Y"], atan2_face.inputs[1])
     group.links.new(atan2_face.outputs["Value"], divide_face.inputs[0])
-    group.links.new(divide_face.outputs["Value"], add_face.inputs[0])
 
     # === Connect axis blending ===
     group.links.new(corner_r.outputs["Value"], axis_blend_raw.inputs[0])
@@ -677,8 +738,9 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     group.links.new(axis_blend_raw.outputs["Value"], axis_blend.inputs["Value"])
 
     # === Connect seam correction (BEFORE blending) ===
-    group.links.new(add_node.outputs["Value"], delta_u.inputs[0])
-    group.links.new(add_face.outputs["Value"], delta_u.inputs[1])
+    # Now using divide_node directly (no +0.5 offset)
+    group.links.new(divide_node.outputs["Value"], delta_u.inputs[0])
+    group.links.new(divide_face.outputs["Value"], delta_u.inputs[1])
 
     group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
     group.links.new(delta_u.outputs["Value"], delta_lt_neg_half.inputs[0])
@@ -687,13 +749,13 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     group.links.new(neg_offset.outputs["Value"], total_offset.inputs[0])
     group.links.new(delta_lt_neg_half.outputs["Value"], total_offset.inputs[1])
 
-    group.links.new(add_node.outputs["Value"], corrected_corner_u.inputs[0])
+    group.links.new(divide_node.outputs["Value"], corrected_corner_u.inputs[0])
     group.links.new(total_offset.outputs["Value"], corrected_corner_u.inputs[1])
 
     # === Connect axis blending (AFTER seam correction) ===
     group.links.new(axis_blend.outputs["Result"], one_minus_blend.inputs[1])
 
-    group.links.new(add_face.outputs["Value"], face_u_weighted.inputs[0])
+    group.links.new(divide_face.outputs["Value"], face_u_weighted.inputs[0])
     group.links.new(one_minus_blend.outputs["Value"], face_u_weighted.inputs[1])
 
     group.links.new(corrected_corner_u.outputs["Value"], corner_u_weighted.inputs[0])
@@ -705,9 +767,12 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     # === Apply internal U scale ===
     group.links.new(blended_u.outputs["Value"], scale_u.inputs[0])
 
+    # === Apply internal V scale ===
+    group.links.new(separate_xyz.outputs["Z"], scale_v.inputs[0])
+
     # === Final UV output ===
     group.links.new(scale_u.outputs["Value"], combine_xyz.inputs["X"])  # U (scaled)
-    group.links.new(separate_xyz.outputs["Z"], combine_xyz.inputs["Y"])  # V = Z
+    group.links.new(scale_v.outputs["Value"], combine_xyz.inputs["Y"])  # V (scaled)
     group.links.new(combine_xyz.outputs["Vector"], output_node.inputs["UV"])
 
     layout_nodes_pcb_style(group, cell_width=0.0, cell_height=150.0)
@@ -777,6 +842,7 @@ def _create_cylindrical_capped_mapping_group(  # noqa: PLR0915
     is_cap.label = "Is Cap (r < 0.99)"
 
     # === Cylindrical UV calculation (for sides) ===
+    # No +0.5 offset so U=0 is at +Y direction, matching overlay
     atan2_node = group.nodes.new("ShaderNodeMath")
     atan2_node.operation = "ARCTAN2"  # type: ignore[attr-defined]
     atan2_node.label = "atan2(X, Y)"
@@ -784,12 +850,7 @@ def _create_cylindrical_capped_mapping_group(  # noqa: PLR0915
     divide_2pi = group.nodes.new("ShaderNodeMath")
     divide_2pi.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_2pi.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_2pi.label = "/ 2π"
-
-    add_half = group.nodes.new("ShaderNodeMath")
-    add_half.operation = "ADD"  # type: ignore[attr-defined]
-    add_half.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_half.label = "+ 0.5 (Corner U)"
+    divide_2pi.label = "/ 2π (Corner U)"
 
     # === Face center U calculation (for seam correction) ===
     atan2_face = group.nodes.new("ShaderNodeMath")
@@ -799,12 +860,7 @@ def _create_cylindrical_capped_mapping_group(  # noqa: PLR0915
     divide_2pi_face = group.nodes.new("ShaderNodeMath")
     divide_2pi_face.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_2pi_face.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_2pi_face.label = "/ 2π Face"
-
-    add_half_face = group.nodes.new("ShaderNodeMath")
-    add_half_face.operation = "ADD"  # type: ignore[attr-defined]
-    add_half_face.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_half_face.label = "+ 0.5 (Face U)"
+    divide_2pi_face.label = "/ 2π (Face U)"
 
     # === Seam correction ===
     delta_u = group.nodes.new("ShaderNodeMath")
@@ -840,7 +896,13 @@ def _create_cylindrical_capped_mapping_group(  # noqa: PLR0915
     scale_cyl_u.inputs[1].default_value = -4.0  # type: ignore[index]
     scale_cyl_u.label = "Scale Cyl U (-4x)"
 
-    # Cylindrical UV (U = corrected angle, V = Z)
+    # Internal scale factor for cylindrical V (0.75x for better aspect ratio)
+    scale_cyl_v = group.nodes.new("ShaderNodeMath")
+    scale_cyl_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_cyl_v.inputs[1].default_value = 0.75  # type: ignore[index]
+    scale_cyl_v.label = "Scale Cyl V (0.75x)"
+
+    # Cylindrical UV (U = corrected angle, V = Z * 0.75)
     combine_cyl_uv = group.nodes.new("ShaderNodeCombineXYZ")
     combine_cyl_uv.label = "Cylindrical UV"
 
@@ -882,31 +944,33 @@ def _create_cylindrical_capped_mapping_group(  # noqa: PLR0915
     group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
     group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
     group.links.new(atan2_node.outputs["Value"], divide_2pi.inputs[0])
-    group.links.new(divide_2pi.outputs["Value"], add_half.inputs[0])
 
     # === Connect face U calculation ===
     group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
     group.links.new(separate_face.outputs["Y"], atan2_face.inputs[1])
     group.links.new(atan2_face.outputs["Value"], divide_2pi_face.inputs[0])
-    group.links.new(divide_2pi_face.outputs["Value"], add_half_face.inputs[0])
 
     # === Connect seam correction ===
-    group.links.new(add_half.outputs["Value"], delta_u.inputs[0])
-    group.links.new(add_half_face.outputs["Value"], delta_u.inputs[1])
+    # Now using divide_2pi directly (no +0.5 offset)
+    group.links.new(divide_2pi.outputs["Value"], delta_u.inputs[0])
+    group.links.new(divide_2pi_face.outputs["Value"], delta_u.inputs[1])
     group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
     group.links.new(delta_u.outputs["Value"], delta_lt_neg_half.inputs[0])
     group.links.new(delta_gt_half.outputs["Value"], neg_offset.inputs[0])
     group.links.new(neg_offset.outputs["Value"], total_offset.inputs[0])
     group.links.new(delta_lt_neg_half.outputs["Value"], total_offset.inputs[1])
-    group.links.new(add_half.outputs["Value"], corrected_cyl_u.inputs[0])
+    group.links.new(divide_2pi.outputs["Value"], corrected_cyl_u.inputs[0])
     group.links.new(total_offset.outputs["Value"], corrected_cyl_u.inputs[1])
 
     # === Apply internal U scale to cylindrical ===
     group.links.new(corrected_cyl_u.outputs["Value"], scale_cyl_u.inputs[0])
 
+    # === Apply internal V scale to cylindrical ===
+    group.links.new(separate_xyz.outputs["Z"], scale_cyl_v.inputs[0])
+
     # === Combine cylindrical UV ===
     group.links.new(scale_cyl_u.outputs["Value"], combine_cyl_uv.inputs["X"])
-    group.links.new(separate_xyz.outputs["Z"], combine_cyl_uv.inputs["Y"])
+    group.links.new(scale_cyl_v.outputs["Value"], combine_cyl_uv.inputs["Y"])
 
     # === Combine planar UV (X * 0.5, Y * 0.5) ===
     group.links.new(separate_xyz.outputs["X"], scale_cap_x.inputs[0])
@@ -982,6 +1046,7 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     corner_r.label = "Corner R"
 
     # Corner U calculation
+    # No +0.5 offset so U=0 is at +Y direction, matching overlay
     atan2_node = group.nodes.new("ShaderNodeMath")
     atan2_node.operation = "ARCTAN2"  # type: ignore[attr-defined]
     atan2_node.label = "atan2(X, Y)"
@@ -989,12 +1054,7 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     divide_2pi = group.nodes.new("ShaderNodeMath")
     divide_2pi.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_2pi.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_2pi.label = "/ 2π"
-
-    add_half = group.nodes.new("ShaderNodeMath")
-    add_half.operation = "ADD"  # type: ignore[attr-defined]
-    add_half.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_half.label = "+ 0.5 (Corner U)"
+    divide_2pi.label = "/ 2π (Corner U)"
 
     # Corner V calculation
     divide_z_len = group.nodes.new("ShaderNodeMath")
@@ -1027,12 +1087,7 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     divide_2pi_face = group.nodes.new("ShaderNodeMath")
     divide_2pi_face.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_2pi_face.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_2pi_face.label = "/ 2π Face"
-
-    add_half_face = group.nodes.new("ShaderNodeMath")
-    add_half_face.operation = "ADD"  # type: ignore[attr-defined]
-    add_half_face.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_half_face.label = "+ 0.5 (Face U)"
+    divide_2pi_face.label = "/ 2π (Face U)"
 
     # === Pole blending ===
     # Blend factor based ONLY on corner position (not face) for continuity
@@ -1079,6 +1134,13 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     scale_u.operation = "MULTIPLY"  # type: ignore[attr-defined]
     scale_u.inputs[1].default_value = -4.0  # type: ignore[index]
     scale_u.label = "Scale U (-4x)"
+
+    # Offset V so that equator (acos(0)/π = 0.5) becomes 0 in UV space
+    # This anchors UV origin at the equator, matching the overlay behavior
+    offset_v = group.nodes.new("ShaderNodeMath")
+    offset_v.operation = "SUBTRACT"  # type: ignore[attr-defined]
+    offset_v.inputs[1].default_value = 0.5  # type: ignore[index]
+    offset_v.label = "V - 0.5 (Equator Offset)"
 
     scale_v = group.nodes.new("ShaderNodeMath")
     scale_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
@@ -1134,7 +1196,6 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
     group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
     group.links.new(atan2_node.outputs["Value"], divide_2pi.inputs[0])
-    group.links.new(divide_2pi.outputs["Value"], add_half.inputs[0])
 
     # Corner V
     group.links.new(separate_xyz.outputs["Z"], divide_z_len.inputs[0])
@@ -1150,7 +1211,6 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
     group.links.new(separate_face.outputs["Y"], atan2_face.inputs[1])
     group.links.new(atan2_face.outputs["Value"], divide_2pi_face.inputs[0])
-    group.links.new(divide_2pi_face.outputs["Value"], add_half_face.inputs[0])
 
     # === Connect pole blending ===
     group.links.new(corner_r.outputs["Value"], pole_blend_raw.inputs[0])
@@ -1159,8 +1219,9 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
 
     # === Connect seam correction (BEFORE blending) ===
     # First correct corner U to be on same side of seam as face U
-    group.links.new(add_half.outputs["Value"], delta_u.inputs[0])
-    group.links.new(add_half_face.outputs["Value"], delta_u.inputs[1])
+    # Now using divide_2pi directly (no +0.5 offset)
+    group.links.new(divide_2pi.outputs["Value"], delta_u.inputs[0])
+    group.links.new(divide_2pi_face.outputs["Value"], delta_u.inputs[1])
 
     group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
     group.links.new(delta_u.outputs["Value"], delta_lt_neg_half.inputs[0])
@@ -1169,13 +1230,13 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     group.links.new(neg_offset.outputs["Value"], total_offset.inputs[0])
     group.links.new(delta_lt_neg_half.outputs["Value"], total_offset.inputs[1])
 
-    group.links.new(add_half.outputs["Value"], corrected_corner_u.inputs[0])
+    group.links.new(divide_2pi.outputs["Value"], corrected_corner_u.inputs[0])
     group.links.new(total_offset.outputs["Value"], corrected_corner_u.inputs[1])
 
     # === Connect pole blending (AFTER seam correction) ===
     # Now blend the seam-corrected corner U with face U
     group.links.new(pole_blend.outputs["Result"], one_minus_blend.inputs[1])
-    group.links.new(add_half_face.outputs["Value"], face_u_weighted.inputs[0])
+    group.links.new(divide_2pi_face.outputs["Value"], face_u_weighted.inputs[0])
     group.links.new(one_minus_blend.outputs["Value"], face_u_weighted.inputs[1])
     group.links.new(corrected_corner_u.outputs["Value"], corner_u_weighted.inputs[0])
     group.links.new(pole_blend.outputs["Result"], corner_u_weighted.inputs[1])
@@ -1184,7 +1245,8 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
 
     # === Apply internal UV scale ===
     group.links.new(blended_u.outputs["Value"], scale_u.inputs[0])
-    group.links.new(divide_pi.outputs["Value"], scale_v.inputs[0])
+    group.links.new(divide_pi.outputs["Value"], offset_v.inputs[0])
+    group.links.new(offset_v.outputs["Value"], scale_v.inputs[0])
 
     # === Final UV output ===
     group.links.new(
@@ -1801,12 +1863,7 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     divide_node = group.nodes.new("ShaderNodeMath")
     divide_node.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_node.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_node.label = "/ 2π"
-
-    add_node = group.nodes.new("ShaderNodeMath")
-    add_node.operation = "ADD"  # type: ignore[attr-defined]
-    add_node.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_node.label = "+ 0.5 (Corner U)"
+    divide_node.label = "/ 2π (Corner U)"
 
     # Corner V = nz * 0.5 + 0.5 (map from [-1,1] to [0,1])
     scale_v = group.nodes.new("ShaderNodeMath")
@@ -1823,7 +1880,7 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     separate_face = group.nodes.new("ShaderNodeSeparateXYZ")
     separate_face.label = "Separate Face Normal"
 
-    # Face U
+    # Face U (no +0.5 offset to match overlay)
     atan2_face = group.nodes.new("ShaderNodeMath")
     atan2_face.operation = "ARCTAN2"  # type: ignore[attr-defined]
     atan2_face.label = "atan2 Face"
@@ -1831,12 +1888,7 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     divide_face = group.nodes.new("ShaderNodeMath")
     divide_face.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_face.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_face.label = "/ 2π Face"
-
-    add_face = group.nodes.new("ShaderNodeMath")
-    add_face.operation = "ADD"  # type: ignore[attr-defined]
-    add_face.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_face.label = "+ 0.5 (Face U)"
+    divide_face.label = "/ 2π (Face U)"
 
     # === Seam correction ===
     delta_u = group.nodes.new("ShaderNodeMath")
@@ -1882,7 +1934,6 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
     group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
     group.links.new(atan2_node.outputs["Value"], divide_node.inputs[0])
-    group.links.new(divide_node.outputs["Value"], add_node.inputs[0])
 
     # Corner V
     group.links.new(separate_xyz.outputs["Z"], scale_v.inputs[0])
@@ -1893,11 +1944,11 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
     group.links.new(separate_face.outputs["Y"], atan2_face.inputs[1])
     group.links.new(atan2_face.outputs["Value"], divide_face.inputs[0])
-    group.links.new(divide_face.outputs["Value"], add_face.inputs[0])
 
     # === Connect seam correction ===
-    group.links.new(add_node.outputs["Value"], delta_u.inputs[0])
-    group.links.new(add_face.outputs["Value"], delta_u.inputs[1])
+    # Now using divide_node directly (no +0.5 offset)
+    group.links.new(divide_node.outputs["Value"], delta_u.inputs[0])
+    group.links.new(divide_face.outputs["Value"], delta_u.inputs[1])
 
     group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
     group.links.new(delta_u.outputs["Value"], delta_lt_neg_half.inputs[0])
@@ -1906,7 +1957,7 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     group.links.new(neg_offset.outputs["Value"], total_offset.inputs[0])
     group.links.new(delta_lt_neg_half.outputs["Value"], total_offset.inputs[1])
 
-    group.links.new(add_node.outputs["Value"], corrected_u.inputs[0])
+    group.links.new(divide_node.outputs["Value"], corrected_u.inputs[0])
     group.links.new(total_offset.outputs["Value"], corrected_u.inputs[1])
 
     # === Apply internal U scale ===
@@ -1976,12 +2027,7 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
     divide_2pi = group.nodes.new("ShaderNodeMath")
     divide_2pi.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_2pi.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_2pi.label = "/ 2π"
-
-    add_half = group.nodes.new("ShaderNodeMath")
-    add_half.operation = "ADD"  # type: ignore[attr-defined]
-    add_half.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_half.label = "+ 0.5 (Corner U)"
+    divide_2pi.label = "/ 2π (Corner U)"
 
     # V = nz * 0.5 + 0.5 (map from [-1,1] to [0,1])
     scale_v = group.nodes.new("ShaderNodeMath")
@@ -2002,12 +2048,7 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
     divide_2pi_face = group.nodes.new("ShaderNodeMath")
     divide_2pi_face.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_2pi_face.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_2pi_face.label = "/ 2π Face"
-
-    add_half_face = group.nodes.new("ShaderNodeMath")
-    add_half_face.operation = "ADD"  # type: ignore[attr-defined]
-    add_half_face.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_half_face.label = "+ 0.5 (Face U)"
+    divide_2pi_face.label = "/ 2π (Face U)"
 
     # === Seam correction ===
     delta_u = group.nodes.new("ShaderNodeMath")
@@ -2079,7 +2120,6 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
     group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
     group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
     group.links.new(atan2_node.outputs["Value"], divide_2pi.inputs[0])
-    group.links.new(divide_2pi.outputs["Value"], add_half.inputs[0])
 
     # === Connect V calculation ===
     group.links.new(separate_xyz.outputs["Z"], scale_v.inputs[0])
@@ -2089,17 +2129,17 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
     group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
     group.links.new(separate_face.outputs["Y"], atan2_face.inputs[1])
     group.links.new(atan2_face.outputs["Value"], divide_2pi_face.inputs[0])
-    group.links.new(divide_2pi_face.outputs["Value"], add_half_face.inputs[0])
 
     # === Connect seam correction ===
-    group.links.new(add_half.outputs["Value"], delta_u.inputs[0])
-    group.links.new(add_half_face.outputs["Value"], delta_u.inputs[1])
+    # Now using divide_2pi directly (no +0.5 offset)
+    group.links.new(divide_2pi.outputs["Value"], delta_u.inputs[0])
+    group.links.new(divide_2pi_face.outputs["Value"], delta_u.inputs[1])
     group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
     group.links.new(delta_u.outputs["Value"], delta_lt_neg_half.inputs[0])
     group.links.new(delta_gt_half.outputs["Value"], neg_offset.inputs[0])
     group.links.new(neg_offset.outputs["Value"], total_offset.inputs[0])
     group.links.new(delta_lt_neg_half.outputs["Value"], total_offset.inputs[1])
-    group.links.new(add_half.outputs["Value"], corrected_cyl_u.inputs[0])
+    group.links.new(divide_2pi.outputs["Value"], corrected_cyl_u.inputs[0])
     group.links.new(total_offset.outputs["Value"], corrected_cyl_u.inputs[1])
 
     # === Apply internal U scale to cylindrical ===
@@ -2186,6 +2226,7 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     corner_r.label = "Corner R"
 
     # Corner U calculation
+    # No +0.5 offset so U=0 is at +Y direction, matching overlay
     atan2_node = group.nodes.new("ShaderNodeMath")
     atan2_node.operation = "ARCTAN2"  # type: ignore[attr-defined]
     atan2_node.label = "atan2(Nx, Ny)"
@@ -2193,12 +2234,7 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     divide_2pi = group.nodes.new("ShaderNodeMath")
     divide_2pi.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_2pi.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_2pi.label = "/ 2π"
-
-    add_half = group.nodes.new("ShaderNodeMath")
-    add_half.operation = "ADD"  # type: ignore[attr-defined]
-    add_half.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_half.label = "+ 0.5 (Corner U)"
+    divide_2pi.label = "/ 2π (Corner U)"
 
     # Corner V calculation (normal is already unit length)
     clamp_node = group.nodes.new("ShaderNodeClamp")
@@ -2227,12 +2263,7 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     divide_2pi_face = group.nodes.new("ShaderNodeMath")
     divide_2pi_face.operation = "DIVIDE"  # type: ignore[attr-defined]
     divide_2pi_face.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
-    divide_2pi_face.label = "/ 2π Face"
-
-    add_half_face = group.nodes.new("ShaderNodeMath")
-    add_half_face.operation = "ADD"  # type: ignore[attr-defined]
-    add_half_face.inputs[1].default_value = 0.5  # type: ignore[index]
-    add_half_face.label = "+ 0.5 (Face U)"
+    divide_2pi_face.label = "/ 2π (Face U)"
 
     # === Pole blending ===
     pole_threshold = group.nodes.new("ShaderNodeValue")
@@ -2270,6 +2301,13 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     scale_u.operation = "MULTIPLY"  # type: ignore[attr-defined]
     scale_u.inputs[1].default_value = -4.0  # type: ignore[index]
     scale_u.label = "Scale U (-4x)"
+
+    # Offset V so that equator (acos(0)/π = 0.5) becomes 0 in UV space
+    # This anchors UV origin at the equator, matching the overlay behavior
+    offset_v = group.nodes.new("ShaderNodeMath")
+    offset_v.operation = "SUBTRACT"  # type: ignore[attr-defined]
+    offset_v.inputs[1].default_value = 0.5  # type: ignore[index]
+    offset_v.label = "V - 0.5 (Equator Offset)"
 
     scale_v = group.nodes.new("ShaderNodeMath")
     scale_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
@@ -2323,7 +2361,6 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
     group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
     group.links.new(atan2_node.outputs["Value"], divide_2pi.inputs[0])
-    group.links.new(divide_2pi.outputs["Value"], add_half.inputs[0])
 
     # Corner V (nz clamped then acos)
     group.links.new(separate_xyz.outputs["Z"], clamp_node.inputs["Value"])
@@ -2337,7 +2374,6 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
     group.links.new(separate_face.outputs["Y"], atan2_face.inputs[1])
     group.links.new(atan2_face.outputs["Value"], divide_2pi_face.inputs[0])
-    group.links.new(divide_2pi_face.outputs["Value"], add_half_face.inputs[0])
 
     # === Connect pole blending ===
     group.links.new(corner_r.outputs["Value"], pole_blend_raw.inputs[0])
@@ -2345,8 +2381,9 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     group.links.new(pole_blend_raw.outputs["Value"], pole_blend.inputs["Value"])
 
     # === Connect seam correction (BEFORE blending) ===
-    group.links.new(add_half.outputs["Value"], delta_u.inputs[0])
-    group.links.new(add_half_face.outputs["Value"], delta_u.inputs[1])
+    # Now using divide_2pi directly (no +0.5 offset)
+    group.links.new(divide_2pi.outputs["Value"], delta_u.inputs[0])
+    group.links.new(divide_2pi_face.outputs["Value"], delta_u.inputs[1])
 
     group.links.new(delta_u.outputs["Value"], delta_gt_half.inputs[0])
     group.links.new(delta_u.outputs["Value"], delta_lt_neg_half.inputs[0])
@@ -2355,12 +2392,12 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     group.links.new(neg_offset.outputs["Value"], total_offset.inputs[0])
     group.links.new(delta_lt_neg_half.outputs["Value"], total_offset.inputs[1])
 
-    group.links.new(add_half.outputs["Value"], corrected_corner_u.inputs[0])
+    group.links.new(divide_2pi.outputs["Value"], corrected_corner_u.inputs[0])
     group.links.new(total_offset.outputs["Value"], corrected_corner_u.inputs[1])
 
     # === Connect pole blending (AFTER seam correction) ===
     group.links.new(pole_blend.outputs["Result"], one_minus_blend.inputs[1])
-    group.links.new(add_half_face.outputs["Value"], face_u_weighted.inputs[0])
+    group.links.new(divide_2pi_face.outputs["Value"], face_u_weighted.inputs[0])
     group.links.new(one_minus_blend.outputs["Value"], face_u_weighted.inputs[1])
     group.links.new(corrected_corner_u.outputs["Value"], corner_u_weighted.inputs[0])
     group.links.new(pole_blend.outputs["Result"], corner_u_weighted.inputs[1])
@@ -2369,7 +2406,8 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
 
     # === Apply internal UV scale ===
     group.links.new(blended_u.outputs["Value"], scale_u.inputs[0])
-    group.links.new(divide_pi.outputs["Value"], scale_v.inputs[0])
+    group.links.new(divide_pi.outputs["Value"], offset_v.inputs[0])
+    group.links.new(offset_v.outputs["Value"], scale_v.inputs[0])
 
     # === Final UV output ===
     group.links.new(scale_u.outputs["Value"], combine_xyz.inputs["X"])  # Final U
