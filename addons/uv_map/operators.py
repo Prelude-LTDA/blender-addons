@@ -32,11 +32,11 @@ if TYPE_CHECKING:
 
 
 class UVMAP_OT_add_modifier(bpy.types.Operator):
-    """Add a UV Map modifier to the selected object."""
+    """Add a procedural operation/effect to the active object: UV Map
+Generate UV coordinates procedurally using various projection methods"""
 
     bl_idname = "uv_map.add_modifier"
     bl_label = "UV Map"
-    bl_description = "Add a UV Map modifier with procedural UV mapping node group"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
