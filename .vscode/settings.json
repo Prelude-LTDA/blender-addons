@@ -1,11 +1,7 @@
 {
     "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-    "python.analysis.typeCheckingMode": "standard",
     "python.analysis.autoImportCompletions": true,
     "python.analysis.diagnosticMode": "workspace",
-    "python.analysis.extraPaths": [
-        "${workspaceFolder}/.venv/lib/python3.11/site-packages"
-    ],
     "[python]": {
         "editor.formatOnSave": true,
         "editor.codeActionsOnSave": {
@@ -15,8 +11,6 @@
         "editor.defaultFormatter": "charliermarsh.ruff"
     },
     "ruff.enable": true,
-    "ruff.lint.run": "onSave",
-    "ruff.format.args": [],
     "ruff.organizeImports": true,
     "files.exclude": {
         "**/__pycache__": true,
