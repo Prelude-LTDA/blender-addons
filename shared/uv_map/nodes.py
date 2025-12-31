@@ -40,23 +40,19 @@ from .constants import (
     SOCKET_V_FLIP,
     SOCKET_V_OFFSET,
     SOCKET_V_TILE,
+    SUB_GROUP_SUFFIX_BOX,
+    SUB_GROUP_SUFFIX_CYLINDRICAL,
+    SUB_GROUP_SUFFIX_CYLINDRICAL_CAPPED,
+    SUB_GROUP_SUFFIX_CYLINDRICAL_CAPPED_NORMAL,
+    SUB_GROUP_SUFFIX_CYLINDRICAL_NORMAL,
+    SUB_GROUP_SUFFIX_PLANAR,
+    SUB_GROUP_SUFFIX_SHRINK_WRAP,
+    SUB_GROUP_SUFFIX_SHRINK_WRAP_NORMAL,
+    SUB_GROUP_SUFFIX_SPHERICAL,
+    SUB_GROUP_SUFFIX_SPHERICAL_NORMAL,
     UV_MAP_NODE_GROUP_PREFIX,
     UV_MAP_NODE_GROUP_TAG,
 )
-
-# Sub-group suffixes (used for cleanup during regeneration)
-_SUB_GROUP_SUFFIXES = [
-    " - Planar",
-    " - Cylindrical",
-    " - Cylindrical Capped",
-    " - Spherical",
-    " - Shrink Wrap",
-    " - Box",
-    " - Cylindrical Normal",
-    " - Cylindrical Capped Normal",
-    " - Spherical Normal",
-    " - Shrink Wrap Normal",
-]
 
 # Flag to force creation of new sub-groups (used during comparison)
 _force_new_subgroups = False
@@ -315,7 +311,7 @@ def _create_planar_mapping_group(
     node_tree: bpy.types.NodeTree,  # noqa: ARG001
 ) -> bpy.types.NodeTree:
     """Create a node group for planar UV mapping."""
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Planar"
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_PLANAR}"
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:
@@ -380,7 +376,7 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     Includes pole-like blending near the cylinder axis (r → 0) to prevent
     UV discontinuities where all angles converge to a single point.
     """
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical"
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_CYLINDRICAL}"
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:
@@ -608,7 +604,7 @@ def _create_cylindrical_capped_mapping_group(  # noqa: PLR0915
     Uses cylindrical mapping for sides and planar mapping for caps.
     Cap detection is based on face position: faces near Z = ±1 are caps.
     """
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical Capped"
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_CYLINDRICAL_CAPPED}"
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:
@@ -816,7 +812,7 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     node_tree: bpy.types.NodeTree,  # noqa: ARG001
 ) -> bpy.types.NodeTree:
     """Create a node group for spherical UV mapping with seam and pole correction."""
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Spherical"
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_SPHERICAL}"
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:
@@ -1101,7 +1097,7 @@ def _create_shrink_wrap_mapping_group(  # noqa: PLR0915
     Near the pole (small r), seam correction is disabled because phi is
     numerically unstable there, but it doesn't matter since r→0 makes U,V→0.
     """
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Shrink Wrap"
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_SHRINK_WRAP}"
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:
@@ -1433,7 +1429,7 @@ def _create_box_mapping_group(  # noqa: PLR0915
     to use for UV coordinates. Projects onto the plane perpendicular
     to the dominant normal axis.
     """
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Box"
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_BOX}"
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:
@@ -1652,7 +1648,7 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     V is derived from the normal's Z component (elevation).
     Scale, origin, tiling, and pole placement match the position-based version.
     """
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical Normal"
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_CYLINDRICAL_NORMAL}"
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:
@@ -1800,7 +1796,9 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
     Uses cylindrical normal mapping for sides and planar normal mapping for caps.
     Cap detection is based on face normal direction: |face_nz| > threshold means cap.
     """
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical Capped Normal"
+    group_name = (
+        f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_CYLINDRICAL_CAPPED_NORMAL}"
+    )
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:
@@ -1994,7 +1992,7 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     Position and scale inputs are ignored - only rotation affects the result.
     Uses the normal direction as if it were a point on a unit sphere.
     """
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Spherical Normal"
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_SPHERICAL_NORMAL}"
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:
@@ -2252,7 +2250,7 @@ def _create_shrink_wrap_normal_mapping_group(  # noqa: PLR0915
       u = r * cos(phi)
       v = r * sin(phi)
     """
-    group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Shrink Wrap Normal"
+    group_name = f"{UV_MAP_NODE_GROUP_PREFIX}{SUB_GROUP_SUFFIX_SHRINK_WRAP_NORMAL}"
 
     # Check if group already exists (unless forcing new)
     if not _force_new_subgroups and group_name in bpy.data.node_groups:

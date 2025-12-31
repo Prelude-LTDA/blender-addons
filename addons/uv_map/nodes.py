@@ -9,9 +9,7 @@ from __future__ import annotations
 
 # Re-export everything from the shared module
 # This allows the addon to work as before while using shared code
-from .shared.uv_map import (
-    SUB_GROUP_SUFFIXES as _SUB_GROUP_SUFFIXES,
-)
+from .shared.uv_map import SUB_GROUP_SUFFIXES
 from .shared.uv_map.nodes import (
     _cleanup_reference_groups,
     _force_new_subgroups,
@@ -25,7 +23,7 @@ from .shared.uv_map.nodes import (
 
 # Re-export for backwards compatibility
 __all__ = [
-    "_SUB_GROUP_SUFFIXES",
+    "SUB_GROUP_SUFFIXES",
     "_cleanup_reference_groups",
     "_force_new_subgroups",
     "create_uv_map_node_group",

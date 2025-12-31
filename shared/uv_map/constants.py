@@ -10,6 +10,18 @@ from __future__ import annotations
 UV_MAP_NODE_GROUP_PREFIX = "UV Map"
 UV_MAP_NODE_GROUP_TAG = "uv_map.generated"
 
+# Sub-group suffix constants (used when building nested group names)
+SUB_GROUP_SUFFIX_PLANAR = " - Planar"
+SUB_GROUP_SUFFIX_CYLINDRICAL = " - Cylindrical"
+SUB_GROUP_SUFFIX_CYLINDRICAL_CAPPED = " - Cylindrical Capped"
+SUB_GROUP_SUFFIX_SPHERICAL = " - Spherical"
+SUB_GROUP_SUFFIX_SHRINK_WRAP = " - Shrink Wrap"
+SUB_GROUP_SUFFIX_BOX = " - Box"
+SUB_GROUP_SUFFIX_CYLINDRICAL_NORMAL = " - Cylindrical Normal"
+SUB_GROUP_SUFFIX_CYLINDRICAL_CAPPED_NORMAL = " - Cylindrical Capped Normal"
+SUB_GROUP_SUFFIX_SPHERICAL_NORMAL = " - Spherical Normal"
+SUB_GROUP_SUFFIX_SHRINK_WRAP_NORMAL = " - Shrink Wrap Normal"
+
 # Mapping type identifiers (matching 3ds Max UVW Map)
 MAPPING_PLANAR = "PLANAR"
 MAPPING_CYLINDRICAL = "CYLINDRICAL"
@@ -78,14 +90,14 @@ GIZMO_TYPES = [
 
 # Sub-group suffixes (used for cleanup during regeneration)
 SUB_GROUP_SUFFIXES = [
-    " - Planar",
-    " - Cylindrical",
-    " - Cylindrical Capped",
-    " - Spherical",
-    " - Shrink Wrap",
-    " - Box",
-    " - Cylindrical Normal",
-    " - Cylindrical Capped Normal",
-    " - Spherical Normal",
-    " - Shrink Wrap Normal",
+    SUB_GROUP_SUFFIX_PLANAR,
+    SUB_GROUP_SUFFIX_CYLINDRICAL,
+    SUB_GROUP_SUFFIX_CYLINDRICAL_CAPPED,
+    SUB_GROUP_SUFFIX_SPHERICAL,
+    SUB_GROUP_SUFFIX_SHRINK_WRAP,
+    SUB_GROUP_SUFFIX_BOX,
+    SUB_GROUP_SUFFIX_CYLINDRICAL_NORMAL,
+    SUB_GROUP_SUFFIX_CYLINDRICAL_CAPPED_NORMAL,
+    SUB_GROUP_SUFFIX_SPHERICAL_NORMAL,
+    SUB_GROUP_SUFFIX_SHRINK_WRAP_NORMAL,
 ]

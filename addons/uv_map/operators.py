@@ -12,7 +12,7 @@ import bpy
 
 from .constants import MODIFIER_NAME
 from .nodes import (
-    _SUB_GROUP_SUFFIXES,
+    SUB_GROUP_SUFFIXES,
     get_or_create_uv_map_node_group,
     get_uv_map_node_groups,
     is_uv_map_node_group,
@@ -203,7 +203,7 @@ class UVMAP_OT_regenerate_node_groups(bpy.types.Operator):
         """Execute the operator."""
         # Helper group names (using constant from nodes.py)
         helper_names = [
-            f"{UV_MAP_NODE_GROUP_PREFIX}{suffix}" for suffix in _SUB_GROUP_SUFFIXES
+            f"{UV_MAP_NODE_GROUP_PREFIX}{suffix}" for suffix in SUB_GROUP_SUFFIXES
         ]
 
         # Find all main UV Map node groups before we delete helpers
