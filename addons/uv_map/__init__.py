@@ -26,6 +26,10 @@ _shared_module_names: tuple[str, ...] = (
     "shared",
     "shared.node_layout",
     "shared.node_group_compare",
+    "shared.uv_map",
+    "shared.uv_map.constants",
+    "shared.uv_map.nodes",
+    "shared.uv_map.utils",
 )
 
 # Module names for registration (order matters for dependencies)

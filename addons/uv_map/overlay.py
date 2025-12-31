@@ -24,14 +24,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 from .constants import (
-    MAPPING_BOX,
-    MAPPING_CYLINDRICAL,
-    MAPPING_CYLINDRICAL_NORMAL,
-    MAPPING_PLANAR,
-    MAPPING_SHRINK_WRAP,
-    MAPPING_SHRINK_WRAP_NORMAL,
-    MAPPING_SPHERICAL,
-    MAPPING_SPHERICAL_NORMAL,
     OVERLAY_COLOR,
     OVERLAY_LINE_WIDTH,
     OVERLAY_U_DIRECTION_COLOR,
@@ -43,6 +35,16 @@ from .operators import (
     get_uv_map_modifier_params,
     get_uv_map_node_group_defaults,
     get_uv_map_node_instance_params,
+)
+from .shared.uv_map.constants import (
+    MAPPING_BOX,
+    MAPPING_CYLINDRICAL,
+    MAPPING_CYLINDRICAL_NORMAL,
+    MAPPING_PLANAR,
+    MAPPING_SHRINK_WRAP,
+    MAPPING_SHRINK_WRAP_NORMAL,
+    MAPPING_SPHERICAL,
+    MAPPING_SPHERICAL_NORMAL,
 )
 
 # Draw handler references

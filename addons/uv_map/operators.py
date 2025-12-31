@@ -10,20 +10,20 @@ from typing import TYPE_CHECKING
 
 import bpy
 
-from .constants import (
-    MAPPING_PLANAR,
-    MAPPING_TYPES,
-    MODIFIER_NAME,
-    SOCKET_MAPPING_TYPE,
-    UV_MAP_NODE_GROUP_PREFIX,
-    UV_MAP_NODE_GROUP_TAG,
-)
+from .constants import MODIFIER_NAME
 from .nodes import (
     _SUB_GROUP_SUFFIXES,
     get_or_create_uv_map_node_group,
     get_uv_map_node_groups,
     is_uv_map_node_group,
     regenerate_uv_map_node_group,
+)
+from .shared.uv_map.constants import (
+    MAPPING_PLANAR,
+    MAPPING_TYPES,
+    SOCKET_MAPPING_TYPE,
+    UV_MAP_NODE_GROUP_PREFIX,
+    UV_MAP_NODE_GROUP_TAG,
 )
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 class UVMAP_OT_add_modifier(bpy.types.Operator):
     """Add a procedural operation/effect to the active object: UV Map
-Generate UV coordinates procedurally using various projection methods"""
+    Generate UV coordinates procedurally using various projection methods"""
 
     bl_idname = "uv_map.add_modifier"
     bl_label = "UV Map"
