@@ -399,7 +399,7 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     input_node = group.nodes.new("NodeGroupInput")
     output_node = group.nodes.new("NodeGroupOutput")
 
-    # Cylindrical: U = atan2(x, y) / (2*pi) + 0.5, V = z
+    # Cylindrical: U = atan2(x, y) / (2*pi), V = z
     # With seam correction using face center position
     # And axis blending (like spherical poles) when r is small
 
@@ -834,7 +834,7 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     output_node = group.nodes.new("NodeGroupOutput")
 
     # Spherical: convert to spherical coordinates with seam and pole correction
-    # U = atan2(x, y) / (2*pi) + 0.5
+    # U = atan2(x, y) / (2*pi)
     # V = acos(z / length) / pi
 
     # === Corner position processing ===

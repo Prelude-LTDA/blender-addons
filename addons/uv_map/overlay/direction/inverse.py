@@ -72,7 +72,7 @@ def inverse_uv_cylindrical(
     - U: angle around Z axis (one full rotation per U unit, before tiling)
     - V: height along Z axis
 
-    Internal scale: -4x on U (so U=0.25 = one rotation), 0.75x on V
+    Internal scale: -4x on U (so U=-4 = one rotation), 0.75x on V
     """
     # Reverse UV processing chain
     u1 = u - u_offset
