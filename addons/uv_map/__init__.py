@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 _shared_module_names: tuple[str, ...] = (
     "shared",
     "shared.node_layout",
+    "shared.node_group_compare",
 )
 
 # Module names for registration (order matters for dependencies)

@@ -38,6 +38,7 @@ from .constants import (
     UV_MAP_NODE_GROUP_PREFIX,
     UV_MAP_NODE_GROUP_TAG,
 )
+from .shared.node_group_compare import node_groups_match
 from .shared.node_layout import layout_nodes_pcb_style
 
 # Sub-group suffixes (used for cleanup during regeneration)
@@ -54,208 +55,8 @@ _SUB_GROUP_SUFFIXES = [
     " - Shrink Wrap Normal",
 ]
 
-
-def _node_groups_match_structurally(
-    group_a: bpy.types.NodeTree | None,
-    group_b: bpy.types.NodeTree | None,
-) -> bool:
-    """Check if two node groups have the same structural content.
-
-    Compares:
-    - Interface sockets (names, types, directions)
-    - Node types and counts
-    - Link connections (from/to socket names and node indices)
-    - Default values on unconnected input sockets
-
-    Does NOT compare:
-    - Node positions/locations
-    - Node labels (only types matter)
-    - Custom properties
-
-    Args:
-        group_a: First node group to compare
-        group_b: Second node group to compare
-
-    Returns:
-        True if the groups match structurally, False otherwise.
-    """
-    if group_a is None or group_b is None:
-        return False
-
-    if group_a.type != group_b.type:
-        return False
-
-    # Compare interface sockets
-    interface_a = group_a.interface
-    interface_b = group_b.interface
-    if interface_a is None or interface_b is None:
-        return interface_a is None and interface_b is None
-
-    # Gather interface socket info (including flags that affect behavior)
-    def get_interface_sockets(
-        interface: bpy.types.NodeTreeInterface,
-    ) -> list[tuple[str, str, str, bool, bool]]:
-        """Get list of (name, socket_type, in_out, hide_value, hide_in_modifier) for each socket."""
-        sockets: list[tuple[str, str, str, bool, bool]] = []
-        for item in interface.items_tree:
-            if getattr(item, "item_type", None) != "SOCKET":
-                continue
-            name = getattr(item, "name", "")
-            socket_type = getattr(item, "socket_type", "")
-            in_out = getattr(item, "in_out", "")
-            hide_value = getattr(item, "hide_value", False)
-            hide_in_modifier = getattr(item, "hide_in_modifier", False)
-            sockets.append((name, socket_type, in_out, hide_value, hide_in_modifier))
-        return sockets
-
-    sockets_a = get_interface_sockets(interface_a)
-    sockets_b = get_interface_sockets(interface_b)
-
-    if sockets_a != sockets_b:
-        return False
-
-    # Compare nodes (by type and count)
-    nodes_a = list(group_a.nodes)
-    nodes_b = list(group_b.nodes)
-
-    if len(nodes_a) != len(nodes_b):
-        return False
-
-    # Build node type signatures (sorted to handle reordering)
-    def get_node_signature(node: bpy.types.Node) -> tuple[str, str]:
-        """Get a signature for a node: (bl_idname, node_tree_name for groups)."""
-        node_tree_name = ""
-        node_tree = getattr(node, "node_tree", None)
-        if node_tree is not None:
-            node_tree_name = node_tree.name
-        return (node.bl_idname, node_tree_name)
-
-    sigs_a = sorted(get_node_signature(n) for n in nodes_a)
-    sigs_b = sorted(get_node_signature(n) for n in nodes_b)
-
-    if sigs_a != sigs_b:
-        return False
-
-    # Recursively compare nested node groups
-    nested_a = [getattr(n, "node_tree", None) for n in nodes_a]
-    nested_b = [getattr(n, "node_tree", None) for n in nodes_b]
-    nested_a = sorted((nt for nt in nested_a if nt is not None), key=lambda x: x.name)
-    nested_b = sorted((nt for nt in nested_b if nt is not None), key=lambda x: x.name)
-
-    for nt_a, nt_b in zip(nested_a, nested_b, strict=False):
-        if not _node_groups_match_structurally(nt_a, nt_b):
-            return False
-
-    # Compare links (connections)
-    # Build a node -> index map for consistent comparison
-    # Sort nodes by type first, then by their outputs/inputs pattern
-    def node_sort_key(node: bpy.types.Node) -> tuple[str, str, int, int]:
-        """Create a stable sort key for nodes."""
-        node_tree_name = ""
-        node_tree = getattr(node, "node_tree", None)
-        if node_tree is not None:
-            node_tree_name = node_tree.name
-        return (
-            node.bl_idname,
-            node_tree_name,
-            len(node.inputs),
-            len(node.outputs),
-        )
-
-    sorted_nodes_a = sorted(nodes_a, key=node_sort_key)
-    sorted_nodes_b = sorted(nodes_b, key=node_sort_key)
-
-    node_index_a = {node: i for i, node in enumerate(sorted_nodes_a)}
-    node_index_b = {node: i for i, node in enumerate(sorted_nodes_b)}
-
-    # Get link signatures: (from_node_index, from_socket_name, to_node_index, to_socket_name)
-    def get_link_signatures(
-        links: bpy.types.NodeLinks,
-        node_index: dict[bpy.types.Node, int],
-    ) -> set[tuple[int, str, int, str]]:
-        """Get set of link signatures."""
-        signatures: set[tuple[int, str, int, str]] = set()
-        for link in links:
-            from_node = link.from_node
-            to_node = link.to_node
-            from_socket = link.from_socket
-            to_socket = link.to_socket
-            if from_node is None or to_node is None:
-                continue
-            if from_socket is None or to_socket is None:
-                continue
-            from_idx = node_index.get(from_node, -1)
-            to_idx = node_index.get(to_node, -1)
-            signatures.add(
-                (
-                    from_idx,
-                    from_socket.name,
-                    to_idx,
-                    to_socket.name,
-                )
-            )
-        return signatures
-
-    links_a = get_link_signatures(group_a.links, node_index_a)
-    links_b = get_link_signatures(group_b.links, node_index_b)
-
-    if links_a != links_b:
-        return False
-
-    # Compare default values on unconnected input sockets
-    # Get set of connected input sockets for each group
-    def get_connected_inputs(
-        links: bpy.types.NodeLinks,
-    ) -> set[tuple[bpy.types.Node, str]]:
-        """Get set of (node, socket_name) for connected input sockets."""
-        connected: set[tuple[bpy.types.Node, str]] = set()
-        for link in links:
-            to_node = link.to_node
-            to_socket = link.to_socket
-            if to_node is not None and to_socket is not None:
-                connected.add((to_node, to_socket.name))
-        return connected
-
-    connected_a = get_connected_inputs(group_a.links)
-    connected_b = get_connected_inputs(group_b.links)
-
-    # Extract default value from a socket (handles various socket types)
-    def get_socket_default_value(socket: bpy.types.NodeSocket) -> object:
-        """Extract the default value from a socket, returning a comparable type."""
-        val = getattr(socket, "default_value", None)
-        if val is None:
-            return None
-        # Convert Blender types to Python types for comparison
-        if hasattr(val, "__iter__") and not isinstance(val, str):
-            # Vector, Color, etc. - convert to tuple
-            return tuple(val)
-        return val
-
-    # Build default value signatures for each group
-    # Signature: (node_index, socket_name, default_value)
-    def get_default_value_signatures(
-        nodes: list[bpy.types.Node],
-        node_index: dict[bpy.types.Node, int],
-        connected: set[tuple[bpy.types.Node, str]],
-    ) -> set[tuple[int, str, object]]:
-        """Get set of (node_index, socket_name, default_value) for unconnected inputs."""
-        signatures: set[tuple[int, str, object]] = set()
-        for node in nodes:
-            idx = node_index.get(node, -1)
-            for inp in node.inputs:
-                # Skip connected sockets - their values don't matter
-                if (node, inp.name) in connected:
-                    continue
-                # Get the default value
-                default_val = get_socket_default_value(inp)
-                if default_val is not None:
-                    signatures.add((idx, inp.name, default_val))
-        return signatures
-
-    defaults_a = get_default_value_signatures(sorted_nodes_a, node_index_a, connected_a)
-    defaults_b = get_default_value_signatures(sorted_nodes_b, node_index_b, connected_b)
-
-    return defaults_a == defaults_b
+# Flag to force creation of new sub-groups (used during comparison)
+_force_new_subgroups = False
 
 
 def get_or_create_uv_map_node_group() -> bpy.types.NodeTree:
@@ -270,6 +71,8 @@ def get_or_create_uv_map_node_group() -> bpy.types.NodeTree:
     Returns:
         Either an existing matching node group, or a newly created one.
     """
+    global _force_new_subgroups
+
     base_name = UV_MAP_NODE_GROUP_PREFIX
 
     # Check if "UV Map" already exists BEFORE creating a reference
@@ -277,18 +80,26 @@ def get_or_create_uv_map_node_group() -> bpy.types.NodeTree:
     if base_name in bpy.data.node_groups:
         existing = bpy.data.node_groups[base_name]
 
-    # Create a fresh node group (will be named "UV Map" or "UV Map.001" etc.)
-    reference_group = create_uv_map_node_group()
+    # Create a fresh node group for comparison
+    # Force new sub-groups to get accurate comparison
+    _force_new_subgroups = True
+    try:
+        reference_group = create_uv_map_node_group()
+    finally:
+        _force_new_subgroups = False
 
     # If an existing group was found, check if it matches structurally
     if existing is not None:
-        if _node_groups_match_structurally(existing, reference_group):
-            # Remove the reference group we created, use existing
-            bpy.data.node_groups.remove(reference_group)
+        if node_groups_match(existing, reference_group):
+            # Remove the reference group and its sub-groups, use existing
+            _cleanup_reference_groups(reference_group)
             return existing
 
-    # No match found, return the newly created group
-    return reference_group
+    # No match found - clean up the temporary sub-groups and create permanent ones
+    # First clean up the force-created groups
+    _cleanup_reference_groups(reference_group)
+    # Now create the actual group with reusable sub-groups
+    return create_uv_map_node_group()
 
 
 def _create_main_interface(node_tree: bpy.types.NodeTree) -> None:
@@ -497,8 +308,8 @@ def _create_planar_mapping_group(
     """Create a node group for planar UV mapping."""
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Planar"
 
-    # Check if group already exists
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -562,7 +373,8 @@ def _create_cylindrical_mapping_group(  # noqa: PLR0915
     """
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical"
 
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -789,7 +601,8 @@ def _create_cylindrical_capped_mapping_group(  # noqa: PLR0915
     """
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical Capped"
 
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -996,7 +809,8 @@ def _create_spherical_mapping_group(  # noqa: PLR0915
     """Create a node group for spherical UV mapping with seam and pole correction."""
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Spherical"
 
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -1280,7 +1094,8 @@ def _create_shrink_wrap_mapping_group(  # noqa: PLR0915
     """
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Shrink Wrap"
 
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -1611,7 +1426,8 @@ def _create_box_mapping_group(  # noqa: PLR0915
     """
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Box"
 
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -1823,13 +1639,14 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     based on the surface normal direction. This is useful for objects
     where the surface orientation matters more than its position.
 
-    Position and scale inputs are ignored - only rotation affects the result.
     U is derived from the normal's azimuthal angle around the Z axis.
-    V is derived from the normal's elevation (angle from XY plane).
+    V is derived from the normal's Z component (elevation).
+    Scale, origin, tiling, and pole placement match the position-based version.
     """
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical Normal"
 
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -1847,15 +1664,15 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     output_node = group.nodes.new("NodeGroupOutput")
 
     # Cylindrical normal mapping:
-    # U = atan2(nx, ny) / (2*pi) + 0.5  (azimuthal angle)
-    # V = nz * 0.5 + 0.5  (elevation, mapped to [0,1])
+    # U = atan2(nx, ny) / (2*pi) * -4  (azimuthal angle, same scale as position-based)
+    # V = nz * 0.75  (elevation, same scale as position-based)
     # With seam correction using face normal
 
     # === Corner normal processing ===
     separate_xyz = group.nodes.new("ShaderNodeSeparateXYZ")
     separate_xyz.label = "Separate Normal"
 
-    # Corner U = atan2(nx, ny) / (2*pi) + 0.5
+    # Corner U = atan2(nx, ny) / (2*pi)
     atan2_node = group.nodes.new("ShaderNodeMath")
     atan2_node.operation = "ARCTAN2"  # type: ignore[attr-defined]
     atan2_node.label = "atan2(Nx, Ny)"
@@ -1865,16 +1682,11 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     divide_node.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
     divide_node.label = "/ 2π (Corner U)"
 
-    # Corner V = nz * 0.5 + 0.5 (map from [-1,1] to [0,1])
+    # V = nz * 0.75 (same scale as position-based cylindrical)
     scale_v = group.nodes.new("ShaderNodeMath")
     scale_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
-    scale_v.inputs[1].default_value = 0.5  # type: ignore[index]
-    scale_v.label = "Nz * 0.5"
-
-    offset_v = group.nodes.new("ShaderNodeMath")
-    offset_v.operation = "ADD"  # type: ignore[attr-defined]
-    offset_v.inputs[1].default_value = 0.5  # type: ignore[index]
-    offset_v.label = "+ 0.5 (V)"
+    scale_v.inputs[1].default_value = 0.75  # type: ignore[index]
+    scale_v.label = "Scale V (0.75x)"
 
     # === Face normal processing ===
     separate_face = group.nodes.new("ShaderNodeSeparateXYZ")
@@ -1930,14 +1742,13 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
     # === Connect corner normal processing ===
     group.links.new(input_node.outputs["Normal"], separate_xyz.inputs["Vector"])
 
-    # Corner U
+    # Corner U (from normal)
     group.links.new(separate_xyz.outputs["X"], atan2_node.inputs[0])
     group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
     group.links.new(atan2_node.outputs["Value"], divide_node.inputs[0])
 
-    # Corner V
+    # V = nz * 0.75 (directly from normal Z, same scale as position-based)
     group.links.new(separate_xyz.outputs["Z"], scale_v.inputs[0])
-    group.links.new(scale_v.outputs["Value"], offset_v.inputs[0])
 
     # === Connect face processing ===
     group.links.new(input_node.outputs["Face Normal"], separate_face.inputs["Vector"])
@@ -1965,7 +1776,7 @@ def _create_cylindrical_normal_mapping_group(  # noqa: PLR0915
 
     # === Final UV output ===
     group.links.new(scale_u.outputs["Value"], combine_xyz.inputs["X"])  # U (scaled)
-    group.links.new(offset_v.outputs["Value"], combine_xyz.inputs["Y"])  # V
+    group.links.new(scale_v.outputs["Value"], combine_xyz.inputs["Y"])  # V (scaled)
     group.links.new(combine_xyz.outputs["Vector"], output_node.inputs["UV"])
 
     layout_nodes_pcb_style(group, cell_width=0.0, cell_height=150.0)
@@ -1982,7 +1793,8 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
     """
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Cylindrical Capped Normal"
 
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -2029,16 +1841,11 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
     divide_2pi.inputs[1].default_value = 2.0 * math.pi  # type: ignore[index]
     divide_2pi.label = "/ 2π (Corner U)"
 
-    # V = nz * 0.5 + 0.5 (map from [-1,1] to [0,1])
-    scale_v = group.nodes.new("ShaderNodeMath")
-    scale_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
-    scale_v.inputs[1].default_value = 0.5  # type: ignore[index]
-    scale_v.label = "Nz * 0.5"
-
-    offset_v = group.nodes.new("ShaderNodeMath")
-    offset_v.operation = "ADD"  # type: ignore[attr-defined]
-    offset_v.inputs[1].default_value = 0.5  # type: ignore[index]
-    offset_v.label = "+ 0.5 (V)"
+    # V = nz * 0.75 (same scale as position-based cylindrical)
+    scale_cyl_v = group.nodes.new("ShaderNodeMath")
+    scale_cyl_v.operation = "MULTIPLY"  # type: ignore[attr-defined]
+    scale_cyl_v.inputs[1].default_value = 0.75  # type: ignore[index]
+    scale_cyl_v.label = "Scale Cyl V (0.75x)"
 
     # === Face center U calculation (for seam correction) ===
     atan2_face = group.nodes.new("ShaderNodeMath")
@@ -2121,9 +1928,8 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
     group.links.new(separate_xyz.outputs["Y"], atan2_node.inputs[1])
     group.links.new(atan2_node.outputs["Value"], divide_2pi.inputs[0])
 
-    # === Connect V calculation ===
-    group.links.new(separate_xyz.outputs["Z"], scale_v.inputs[0])
-    group.links.new(scale_v.outputs["Value"], offset_v.inputs[0])
+    # === Connect V calculation (V = nz * 0.75) ===
+    group.links.new(separate_xyz.outputs["Z"], scale_cyl_v.inputs[0])
 
     # === Connect face U calculation ===
     group.links.new(separate_face.outputs["X"], atan2_face.inputs[0])
@@ -2147,7 +1953,7 @@ def _create_cylindrical_capped_normal_mapping_group(  # noqa: PLR0915
 
     # === Combine cylindrical UV ===
     group.links.new(scale_cyl_u.outputs["Value"], combine_cyl_uv.inputs["X"])
-    group.links.new(offset_v.outputs["Value"], combine_cyl_uv.inputs["Y"])
+    group.links.new(scale_cyl_v.outputs["Value"], combine_cyl_uv.inputs["Y"])
 
     # === Combine planar UV (Nx * 0.5, Ny * 0.5) ===
     group.links.new(separate_xyz.outputs["X"], scale_cap_x.inputs[0])
@@ -2181,7 +1987,8 @@ def _create_spherical_normal_mapping_group(  # noqa: PLR0915
     """
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Spherical Normal"
 
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -2438,7 +2245,8 @@ def _create_shrink_wrap_normal_mapping_group(  # noqa: PLR0915
     """
     group_name = f"{UV_MAP_NODE_GROUP_PREFIX} - Shrink Wrap Normal"
 
-    if group_name in bpy.data.node_groups:
+    # Check if group already exists (unless forcing new)
+    if not _force_new_subgroups and group_name in bpy.data.node_groups:
         return bpy.data.node_groups[group_name]
 
     group = bpy.data.node_groups.new(group_name, "GeometryNodeTree")
@@ -3853,6 +3661,24 @@ def get_uv_map_node_groups() -> list[bpy.types.NodeTree]:
     return [ng for ng in bpy.data.node_groups if is_uv_map_node_group(ng)]
 
 
+def _cleanup_reference_groups(reference: bpy.types.NodeTree) -> None:
+    """Clean up a reference node group and all its nested sub-groups."""
+    # Collect all nested groups first
+    groups_to_remove: list[bpy.types.NodeTree] = []
+    for node in reference.nodes:
+        node_tree = getattr(node, "node_tree", None)
+        if node_tree is not None:
+            groups_to_remove.append(node_tree)
+
+    # Remove the main group
+    bpy.data.node_groups.remove(reference)
+
+    # Remove nested groups (they will have .001 etc suffixes from force_new)
+    for group in groups_to_remove:
+        if group.name in bpy.data.node_groups:
+            bpy.data.node_groups.remove(group)
+
+
 def needs_regeneration() -> bool:
     """Check if any UV Map node groups need regeneration.
 
@@ -3862,21 +3688,28 @@ def needs_regeneration() -> bool:
     Returns:
         True if regeneration is needed, False otherwise.
     """
+    global _force_new_subgroups
+
     existing_groups = get_uv_map_node_groups()
     if not existing_groups:
         return False
 
     # Create a fresh reference to compare against
-    reference = create_uv_map_node_group()
+    # Force creation of new sub-groups to get accurate comparison
+    _force_new_subgroups = True
+    try:
+        reference = create_uv_map_node_group()
+    finally:
+        _force_new_subgroups = False
 
     try:
         for group in existing_groups:
-            if not _node_groups_match_structurally(group, reference):
+            if not node_groups_match(group, reference):
                 return True
         return False
     finally:
-        # Always clean up the reference group
-        bpy.data.node_groups.remove(reference)
+        # Clean up the reference group and its sub-groups
+        _cleanup_reference_groups(reference)
 
 
 # Classes to register (none for this module - it's utility only)

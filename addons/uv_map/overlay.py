@@ -26,9 +26,12 @@ if TYPE_CHECKING:
 from .constants import (
     MAPPING_BOX,
     MAPPING_CYLINDRICAL,
+    MAPPING_CYLINDRICAL_NORMAL,
     MAPPING_PLANAR,
     MAPPING_SHRINK_WRAP,
+    MAPPING_SHRINK_WRAP_NORMAL,
     MAPPING_SPHERICAL,
+    MAPPING_SPHERICAL_NORMAL,
     OVERLAY_COLOR,
     OVERLAY_LINE_WIDTH,
     OVERLAY_U_DIRECTION_COLOR,
@@ -513,7 +516,7 @@ def _generate_shrink_wrap_vertices(  # noqa: PLR0915
 def _generate_cylinder_normal_vertices(
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
-    segments: int = 32,
+    segments: int = 64,
 ) -> list[tuple[float, float, float]]:
     """Generate vertices for a normal-based cylinder wireframe indicator.
 
@@ -557,7 +560,7 @@ def _generate_cylinder_normal_vertices(
             vertices.append((transformed.x, transformed.y, transformed.z))
 
     # Generate vertical lines (4 evenly spaced, dashed with subdivisions)
-    num_v_segments = 8  # Number of segments for vertical lines
+    num_v_segments = 16  # Number of segments for vertical lines
     for i in range(4):
         angle = (i / 4) * 2.0 * math.pi
         x, y = radius_x * math.cos(angle), radius_y * math.sin(angle)
@@ -603,7 +606,7 @@ def _generate_cylinder_normal_vertices(
 def _generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
-    segments: int = 32,
+    segments: int = 64,
 ) -> list[tuple[float, float, float]]:
     """Generate vertices for a capped normal-based cylinder wireframe indicator.
 
@@ -647,7 +650,7 @@ def _generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
             vertices.append((transformed.x, transformed.y, transformed.z))
 
     # Generate vertical lines (4 evenly spaced, dashed with subdivisions)
-    num_v_segments = 8  # Number of segments for vertical lines
+    num_v_segments = 16  # Number of segments for vertical lines
     for i in range(4):
         angle = (i / 4) * 2.0 * math.pi
         x, y = radius_x * math.cos(angle), radius_y * math.sin(angle)
@@ -691,7 +694,7 @@ def _generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
     sqrt2_inv = 1.0 / math.sqrt(2.0)  # ≈ 0.707
 
     # Number of segments for dashed X lines
-    x_segments = 8  # Even number to create dashes (4 dashes per line)
+    x_segments = 16  # Even number to create dashes (8 dashes per line)
 
     # Bottom cap X (inscribed in ellipse) - dashed
     for p1, p2 in [
@@ -751,9 +754,9 @@ def _generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
 def _generate_sphere_normal_vertices(
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
-    segments: int = 32,
+    segments: int = 64,
     drawn_rings: int = 4,
-    smooth_rings: int = 16,
+    smooth_rings: int = 32,
 ) -> list[tuple[float, float, float]]:
     """Generate vertices for a normal-based sphere/ellipsoid wireframe indicator.
 
@@ -846,7 +849,7 @@ def _generate_shrink_wrap_normal_vertices(  # noqa: PLR0915
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
     grid_lines: int = 4,
-    segments_per_line: int = 32,
+    segments_per_line: int = 64,
 ) -> list[tuple[float, float, float]]:
     """Generate vertices for shrink wrap (azimuthal) normal-based wireframe indicator.
 
@@ -2117,6 +2120,337 @@ def _generate_uv_direction_vertices(  # noqa: PLR0915
         )
         v_proj_vertices.extend(verts)
 
+    elif mapping_type == MAPPING_CYLINDRICAL_NORMAL:
+        # Cylindrical Normal: uses normal direction instead of position
+        # Show on a unit sphere to visualize the normal-space mapping
+        # U line at equator (z=0) going around
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_cylindrical,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        u_vertices.extend(verts)
+        u_labels.append(endpoint)
+
+        # V line going up along z axis
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_cylindrical,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        v_vertices.extend(verts)
+        v_labels.append(endpoint)
+
+        # Projected lines
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_cylindrical,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        u_proj_vertices.extend(verts)
+
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_cylindrical,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            segments,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        v_proj_vertices.extend(verts)
+
+        # Cap UV indicator for normal-based capped cylinder
+        if cap:
+            # For normal-based, the cap is at z=+1 on the unit sphere
+            # Use planar mapping on the cap (normal = +Z maps to center)
+            cap_offset = Matrix.Translation(Vector((0, 0, 1.0)))
+            cap_scale = Matrix.Diagonal(Vector((1.0, 1.0, 0.0, 1.0)))
+            cap_xform = transform @ cap_offset @ cap_scale
+
+            verts, endpoint = _generate_uv_direction_line(
+                _inverse_uv_planar,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                segments,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                cap_xform,
+            )
+            u_vertices.extend(verts)
+            u_labels.append(endpoint)
+
+            verts, endpoint = _generate_uv_direction_line(
+                _inverse_uv_planar,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                segments,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                cap_xform,
+            )
+            v_vertices.extend(verts)
+            v_labels.append(endpoint)
+
+            # Cap projected lines
+            verts, _ = _generate_uv_direction_line(
+                _inverse_uv_planar,
+                0.0,
+                1.0,
+                1.0,
+                1.0,
+                segments,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                cap_xform,
+                dashed=True,
+            )
+            u_proj_vertices.extend(verts)
+            verts, _ = _generate_uv_direction_line(
+                _inverse_uv_planar,
+                1.0,
+                0.0,
+                1.0,
+                1.0,
+                segments,
+                u_tile,
+                v_tile,
+                u_offset,
+                v_offset,
+                uv_rotation,
+                u_flip,
+                v_flip,
+                cap_xform,
+                dashed=True,
+            )
+            v_proj_vertices.extend(verts)
+
+    elif mapping_type == MAPPING_SPHERICAL_NORMAL:
+        # Spherical Normal: uses normal direction instead of position
+        # Same UV mapping as spherical, visualized on a unit sphere
+        v_equator = 0.0
+        v_north = 1.0
+
+        # U line at equator going around
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_spherical,
+            0.0,
+            v_equator,
+            1.0,
+            v_equator,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        u_vertices.extend(verts)
+        u_labels.append(endpoint)
+
+        # V line from equator toward north pole
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_spherical,
+            0.0,
+            v_equator,
+            0.0,
+            v_north,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        v_vertices.extend(verts)
+        v_labels.append(endpoint)
+
+        # Projected lines
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_spherical,
+            0.0,
+            v_north,
+            1.0,
+            v_north,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        u_proj_vertices.extend(verts)
+
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_spherical,
+            1.0,
+            v_equator,
+            1.0,
+            v_north,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        v_proj_vertices.extend(verts)
+
+    elif mapping_type == MAPPING_SHRINK_WRAP_NORMAL:
+        # Shrink Wrap Normal: uses normal direction instead of position
+        # Same UV mapping as shrink wrap, visualized on a unit sphere
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_shrink_wrap,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        u_vertices.extend(verts)
+        u_labels.append(endpoint)
+
+        verts, endpoint = _generate_uv_direction_line(
+            _inverse_uv_shrink_wrap,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+        )
+        v_vertices.extend(verts)
+        v_labels.append(endpoint)
+
+        # Projected lines
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_shrink_wrap,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        u_proj_vertices.extend(verts)
+
+        verts, _ = _generate_uv_direction_line(
+            _inverse_uv_shrink_wrap,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            segments * 2,
+            u_tile,
+            v_tile,
+            u_offset,
+            v_offset,
+            uv_rotation,
+            u_flip,
+            v_flip,
+            transform,
+            dashed=True,
+        )
+        v_proj_vertices.extend(verts)
+
     return u_vertices, v_vertices, u_proj_vertices, v_proj_vertices, u_labels, v_labels
 
 
@@ -2124,6 +2458,10 @@ def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
     """Draw the UV map shape overlay in the 3D viewport."""
     global _cached_u_labels, _cached_v_labels  # noqa: PLW0603
     context = bpy.context
+
+    # Clear cached labels at the start - they'll be repopulated if we draw
+    _cached_u_labels = []
+    _cached_v_labels = []
 
     # Check if we're in the 3D viewport
     if context.area is None or context.area.type != "VIEW_3D":
@@ -2313,65 +2651,81 @@ def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
     batch.draw(shader)
 
     # Draw UV direction indicators (yellow lines showing U and V axes)
-    # Skip for normal-based mappings as position is irrelevant there
-    if not normal_based:
-        (
-            u_dir_vertices,
-            v_dir_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        ) = _generate_uv_direction_vertices(
-            mapping_type,
-            (world_position.x, world_position.y, world_position.z),
-            combined_rotation,
-            world_size,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rot,
-            u_flip,
-            v_flip,
-            cap,
-        )
+    # For normal-based mappings, use the normal mapping type and center at object origin
+    if normal_based:
+        # Determine the actual normal-based mapping type
+        if mapping_type == MAPPING_CYLINDRICAL:
+            effective_mapping_type = MAPPING_CYLINDRICAL_NORMAL
+        elif mapping_type == MAPPING_SPHERICAL:
+            effective_mapping_type = MAPPING_SPHERICAL_NORMAL
+        elif mapping_type == MAPPING_SHRINK_WRAP:
+            effective_mapping_type = MAPPING_SHRINK_WRAP_NORMAL
+        else:
+            effective_mapping_type = mapping_type
 
-        # Draw U direction line (yellow)
-        if u_dir_vertices:
-            u_batch = batch_for_shader(shader, "LINES", {"pos": u_dir_vertices})
-            shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH)
-            shader.uniform_float("color", OVERLAY_U_DIRECTION_COLOR)
-            u_batch.draw(shader)
-
-        # Draw V direction line (yellow-green)
-        if v_dir_vertices:
-            v_batch = batch_for_shader(shader, "LINES", {"pos": v_dir_vertices})
-            shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH)
-            shader.uniform_float("color", OVERLAY_V_DIRECTION_COLOR)
-            v_batch.draw(shader)
-
-        # Draw projected U line (dashed, same color as U but thinner)
-        if u_proj_vertices:
-            u_proj_batch = batch_for_shader(shader, "LINES", {"pos": u_proj_vertices})
-            shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH * 0.7)
-            shader.uniform_float("color", OVERLAY_U_DIRECTION_COLOR)
-            u_proj_batch.draw(shader)
-
-        # Draw projected V line (dashed, same color as V but thinner)
-        if v_proj_vertices:
-            v_proj_batch = batch_for_shader(shader, "LINES", {"pos": v_proj_vertices})
-            shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH * 0.7)
-            shader.uniform_float("color", OVERLAY_V_DIRECTION_COLOR)
-            v_proj_batch.draw(shader)
-
-        # Cache label positions for the text drawing handler
-        _cached_u_labels = u_labels
-        _cached_v_labels = v_labels
+        # Use object origin for position since normal-based mappings don't use position
+        obj_origin = obj_matrix @ Vector((0.0, 0.0, 0.0))
+        direction_position = (obj_origin.x, obj_origin.y, obj_origin.z)
+        # Normal-based overlays use half scale (same as shape wireframe)
+        direction_size = (world_size[0] * 0.5, world_size[1] * 0.5, world_size[2] * 0.5)
     else:
-        # Clear cached labels for normal-based mappings
-        _cached_u_labels = []
-        _cached_v_labels = []
+        effective_mapping_type = mapping_type
+        direction_position = (world_position.x, world_position.y, world_position.z)
+        direction_size = world_size
+
+    (
+        u_dir_vertices,
+        v_dir_vertices,
+        u_proj_vertices,
+        v_proj_vertices,
+        u_labels,
+        v_labels,
+    ) = _generate_uv_direction_vertices(
+        effective_mapping_type,
+        direction_position,
+        combined_rotation,
+        direction_size,
+        u_tile,
+        v_tile,
+        u_offset,
+        v_offset,
+        uv_rot,
+        u_flip,
+        v_flip,
+        cap,
+    )
+
+    # Draw U direction line (yellow)
+    if u_dir_vertices:
+        u_batch = batch_for_shader(shader, "LINES", {"pos": u_dir_vertices})
+        shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH)
+        shader.uniform_float("color", OVERLAY_U_DIRECTION_COLOR)
+        u_batch.draw(shader)
+
+    # Draw V direction line (yellow-green)
+    if v_dir_vertices:
+        v_batch = batch_for_shader(shader, "LINES", {"pos": v_dir_vertices})
+        shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH)
+        shader.uniform_float("color", OVERLAY_V_DIRECTION_COLOR)
+        v_batch.draw(shader)
+
+    # Draw projected U line (dashed, same color as U but thinner)
+    if u_proj_vertices:
+        u_proj_batch = batch_for_shader(shader, "LINES", {"pos": u_proj_vertices})
+        shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH * 0.7)
+        shader.uniform_float("color", OVERLAY_U_DIRECTION_COLOR)
+        u_proj_batch.draw(shader)
+
+    # Draw projected V line (dashed, same color as V but thinner)
+    if v_proj_vertices:
+        v_proj_batch = batch_for_shader(shader, "LINES", {"pos": v_proj_vertices})
+        shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH * 0.7)
+        shader.uniform_float("color", OVERLAY_V_DIRECTION_COLOR)
+        v_proj_batch.draw(shader)
+
+    # Cache label positions for the text drawing handler
+    _cached_u_labels = u_labels
+    _cached_v_labels = v_labels
 
     # Restore state
     gpu.state.blend_set("NONE")
