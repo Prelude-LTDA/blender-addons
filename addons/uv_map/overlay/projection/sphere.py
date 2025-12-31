@@ -74,6 +74,7 @@ def generate_sphere_vertices(
 
 
 def generate_sphere_normal_vertices(
+    position: tuple[float, float, float],
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
     segments: int = 64,
@@ -82,11 +83,13 @@ def generate_sphere_normal_vertices(
 ) -> list[tuple[float, float, float]]:
     """Generate vertices for a normal-based sphere/ellipsoid wireframe indicator.
 
-    Shows rotation and scale orientation. Position is irrelevant for normal-based mapping.
+    Shows rotation and scale orientation. Position is typically set to object origin
+    since normal-based mapping doesn't depend on projection position.
     Dashed latitude lines indicate that this represents normal direction, not position.
     """
+    pos_vec = Vector(position)
     rot_euler = Euler(rotation, "XYZ")
-    transform = rot_euler.to_matrix().to_4x4()
+    transform = Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4()
 
     vertices: list[tuple[float, float, float]] = []
 

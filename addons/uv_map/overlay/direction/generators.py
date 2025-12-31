@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 from mathutils import Euler, Matrix, Vector
 
 from ...shared.uv_map.constants import (
     MAPPING_BOX,
     MAPPING_CYLINDRICAL,
+    MAPPING_CYLINDRICAL_CAPPED,
     MAPPING_CYLINDRICAL_NORMAL,
+    MAPPING_CYLINDRICAL_NORMAL_CAPPED,
     MAPPING_PLANAR,
     MAPPING_SHRINK_WRAP,
     MAPPING_SHRINK_WRAP_NORMAL,
@@ -24,6 +27,34 @@ from .inverse import (
 )
 from .utils import compute_adaptive_segments, generate_uv_direction_line
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    # Type alias for direction generator functions
+    DirectionGenerator = Callable[
+        [
+            int,  # segments
+            float,  # u_tile
+            float,  # v_tile
+            float,  # u_offset
+            float,  # v_offset
+            float,  # uv_rotation
+            bool,  # u_flip
+            bool,  # v_flip
+            Matrix,  # transform
+            list[tuple[float, float, float]],  # u_vertices
+            list[tuple[float, float, float]],  # v_vertices
+            list[tuple[float, float, float]],  # u_proj_vertices
+            list[tuple[float, float, float]],  # v_proj_vertices
+            list[tuple[float, float, float]],  # u_labels
+            list[tuple[float, float, float]],  # v_labels
+        ],
+        None,
+    ]
+
+# Mapping from mapping type to generator function (populated after function definitions)
+_DIRECTION_GENERATORS: dict[str, DirectionGenerator] = {}
+
 
 def generate_uv_direction_vertices(
     mapping_type: str,
@@ -37,7 +68,6 @@ def generate_uv_direction_vertices(
     uv_rotation: float,
     u_flip: bool,
     v_flip: bool,
-    cap: bool = False,
 ) -> tuple[
     list[tuple[float, float, float]],
     list[tuple[float, float, float]],
@@ -81,143 +111,10 @@ def generate_uv_direction_vertices(
     u_labels: list[tuple[float, float, float]] = []
     v_labels: list[tuple[float, float, float]] = []
 
-    if mapping_type == MAPPING_PLANAR:
-        _generate_planar_direction(
-            segments,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rotation,
-            u_flip,
-            v_flip,
-            transform,
-            u_vertices,
-            v_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        )
-
-    elif mapping_type == MAPPING_CYLINDRICAL:
-        _generate_cylindrical_direction(
-            segments,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rotation,
-            u_flip,
-            v_flip,
-            transform,
-            cap,
-            u_vertices,
-            v_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        )
-
-    elif mapping_type == MAPPING_SPHERICAL:
-        _generate_spherical_direction(
-            segments,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rotation,
-            u_flip,
-            v_flip,
-            transform,
-            u_vertices,
-            v_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        )
-
-    elif mapping_type == MAPPING_SHRINK_WRAP:
-        _generate_shrink_wrap_direction(
-            segments,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rotation,
-            u_flip,
-            v_flip,
-            transform,
-            u_vertices,
-            v_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        )
-
-    elif mapping_type == MAPPING_BOX:
-        _generate_box_direction(
-            segments,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rotation,
-            u_flip,
-            v_flip,
-            transform,
-            u_vertices,
-            v_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        )
-
-    elif mapping_type == MAPPING_CYLINDRICAL_NORMAL:
-        _generate_cylindrical_normal_direction(
-            segments,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rotation,
-            u_flip,
-            v_flip,
-            transform,
-            cap,
-            u_vertices,
-            v_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        )
-
-    elif mapping_type == MAPPING_SPHERICAL_NORMAL:
-        _generate_spherical_normal_direction(
-            segments,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rotation,
-            u_flip,
-            v_flip,
-            transform,
-            u_vertices,
-            v_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        )
-
-    elif mapping_type == MAPPING_SHRINK_WRAP_NORMAL:
-        _generate_shrink_wrap_normal_direction(
+    # Look up and call the appropriate generator function
+    generator = _DIRECTION_GENERATORS.get(mapping_type)
+    if generator is not None:
+        generator(
             segments,
             u_tile,
             v_tile,
@@ -347,7 +244,6 @@ def _generate_cylindrical_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    cap: bool,
     u_vertices: list[tuple[float, float, float]],
     v_vertices: list[tuple[float, float, float]],
     u_proj_vertices: list[tuple[float, float, float]],
@@ -436,26 +332,63 @@ def _generate_cylindrical_direction(
     )
     v_proj_vertices.extend(verts)
 
-    # Cap indicators if capped
-    if cap:
-        _add_cap_direction(
-            segments,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rotation,
-            u_flip,
-            v_flip,
-            transform,
-            1.0,  # cap_z
-            u_vertices,
-            v_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        )
+
+def _generate_cylindrical_capped_direction(
+    segments: int,
+    u_tile: float,
+    v_tile: float,
+    u_offset: float,
+    v_offset: float,
+    uv_rotation: float,
+    u_flip: bool,
+    v_flip: bool,
+    transform: Matrix,
+    u_vertices: list[tuple[float, float, float]],
+    v_vertices: list[tuple[float, float, float]],
+    u_proj_vertices: list[tuple[float, float, float]],
+    v_proj_vertices: list[tuple[float, float, float]],
+    u_labels: list[tuple[float, float, float]],
+    v_labels: list[tuple[float, float, float]],
+) -> None:
+    """Generate cylindrical capped UV direction indicators."""
+    # Generate the base cylindrical directions
+    _generate_cylindrical_direction(
+        segments,
+        u_tile,
+        v_tile,
+        u_offset,
+        v_offset,
+        uv_rotation,
+        u_flip,
+        v_flip,
+        transform,
+        u_vertices,
+        v_vertices,
+        u_proj_vertices,
+        v_proj_vertices,
+        u_labels,
+        v_labels,
+    )
+
+    # Add cap indicators
+    _add_cap_direction(
+        segments,
+        u_tile,
+        v_tile,
+        u_offset,
+        v_offset,
+        uv_rotation,
+        u_flip,
+        v_flip,
+        transform,
+        1.0,  # cap_z
+        u_vertices,
+        v_vertices,
+        u_proj_vertices,
+        v_proj_vertices,
+        u_labels,
+        v_labels,
+    )
 
 
 def _generate_spherical_direction(
@@ -751,7 +684,6 @@ def _generate_cylindrical_normal_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    cap: bool,
     u_vertices: list[tuple[float, float, float]],
     v_vertices: list[tuple[float, float, float]],
     u_proj_vertices: list[tuple[float, float, float]],
@@ -837,25 +769,63 @@ def _generate_cylindrical_normal_direction(
     )
     v_proj_vertices.extend(verts)
 
-    if cap:
-        _add_cap_direction(
-            segments,
-            u_tile,
-            v_tile,
-            u_offset,
-            v_offset,
-            uv_rotation,
-            u_flip,
-            v_flip,
-            transform,
-            1.0,
-            u_vertices,
-            v_vertices,
-            u_proj_vertices,
-            v_proj_vertices,
-            u_labels,
-            v_labels,
-        )
+
+def _generate_cylindrical_normal_capped_direction(
+    segments: int,
+    u_tile: float,
+    v_tile: float,
+    u_offset: float,
+    v_offset: float,
+    uv_rotation: float,
+    u_flip: bool,
+    v_flip: bool,
+    transform: Matrix,
+    u_vertices: list[tuple[float, float, float]],
+    v_vertices: list[tuple[float, float, float]],
+    u_proj_vertices: list[tuple[float, float, float]],
+    v_proj_vertices: list[tuple[float, float, float]],
+    u_labels: list[tuple[float, float, float]],
+    v_labels: list[tuple[float, float, float]],
+) -> None:
+    """Generate cylindrical normal-based capped UV direction indicators."""
+    # Generate the base cylindrical normal directions
+    _generate_cylindrical_normal_direction(
+        segments,
+        u_tile,
+        v_tile,
+        u_offset,
+        v_offset,
+        uv_rotation,
+        u_flip,
+        v_flip,
+        transform,
+        u_vertices,
+        v_vertices,
+        u_proj_vertices,
+        v_proj_vertices,
+        u_labels,
+        v_labels,
+    )
+
+    # Add cap indicators
+    _add_cap_direction(
+        segments,
+        u_tile,
+        v_tile,
+        u_offset,
+        v_offset,
+        uv_rotation,
+        u_flip,
+        v_flip,
+        transform,
+        1.0,
+        u_vertices,
+        v_vertices,
+        u_proj_vertices,
+        v_proj_vertices,
+        u_labels,
+        v_labels,
+    )
 
 
 def _generate_spherical_normal_direction(
@@ -1186,3 +1156,20 @@ def _add_cap_direction(
         u_labels,
         v_labels,
     )
+
+
+# Populate the mapping type -> generator function dictionary
+_DIRECTION_GENERATORS.update(
+    {
+        MAPPING_PLANAR: _generate_planar_direction,
+        MAPPING_CYLINDRICAL: _generate_cylindrical_direction,
+        MAPPING_CYLINDRICAL_CAPPED: _generate_cylindrical_capped_direction,
+        MAPPING_SPHERICAL: _generate_spherical_direction,
+        MAPPING_SHRINK_WRAP: _generate_shrink_wrap_direction,
+        MAPPING_BOX: _generate_box_direction,
+        MAPPING_CYLINDRICAL_NORMAL: _generate_cylindrical_normal_direction,
+        MAPPING_CYLINDRICAL_NORMAL_CAPPED: _generate_cylindrical_normal_capped_direction,
+        MAPPING_SPHERICAL_NORMAL: _generate_spherical_normal_direction,
+        MAPPING_SHRINK_WRAP_NORMAL: _generate_shrink_wrap_normal_direction,
+    }
+)

@@ -136,6 +136,7 @@ def generate_shrink_wrap_vertices(  # noqa: PLR0915
 
 
 def generate_shrink_wrap_normal_vertices(  # noqa: PLR0915
+    position: tuple[float, float, float],
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
     grid_lines: int = 4,
@@ -143,17 +144,21 @@ def generate_shrink_wrap_normal_vertices(  # noqa: PLR0915
 ) -> list[tuple[float, float, float]]:
     """Generate vertices for shrink wrap (azimuthal) normal-based wireframe indicator.
 
-    Shows rotation and scale orientation. Position is irrelevant for normal-based mapping.
+    Shows rotation and scale orientation. Position is typically set to object origin
+    since normal-based mapping doesn't depend on projection position.
     Uses dashed lines to indicate that this represents normal direction, not position.
 
     Uses inverse azimuthal equidistant projection but with dashed pattern.
     """
+    pos_vec = Vector(position)
     rot_euler = Euler(rotation, "XYZ")
 
     # Scale affects normal transformation - use as ellipsoid radii
     scale_vec = Vector(size)
     scale_matrix = Matrix.Diagonal((scale_vec * 0.5).to_4d())
-    transform = rot_euler.to_matrix().to_4x4() @ scale_matrix
+    transform = (
+        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+    )
 
     vertices: list[tuple[float, float, float]] = []
 

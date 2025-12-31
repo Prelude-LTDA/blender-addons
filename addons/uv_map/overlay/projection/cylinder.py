@@ -169,17 +169,20 @@ def generate_cylinder_capped_vertices(
 
 
 def generate_cylinder_normal_vertices(
+    position: tuple[float, float, float],
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
     segments: int = 64,
 ) -> list[tuple[float, float, float]]:
     """Generate vertices for a normal-based cylinder wireframe indicator.
 
-    Shows rotation and scale orientation. Position is irrelevant for normal-based mapping.
+    Shows rotation and scale orientation. Position is typically set to object origin
+    since normal-based mapping doesn't depend on projection position.
     Dashed circles indicate that this represents normal direction, not position.
     """
+    pos_vec = Vector(position)
     rot_euler = Euler(rotation, "XYZ")
-    transform = rot_euler.to_matrix().to_4x4()
+    transform = Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4()
 
     vertices: list[tuple[float, float, float]] = []
 
@@ -259,6 +262,7 @@ def generate_cylinder_normal_vertices(
 
 
 def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
+    position: tuple[float, float, float],
     rotation: tuple[float, float, float],
     size: tuple[float, float, float],
     segments: int = 64,
@@ -267,9 +271,12 @@ def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
 
     Same as cylinder normal but with X marks on the top and bottom caps
     to indicate planar normal-based mapping on caps.
+    Position is typically set to object origin since normal-based mapping
+    doesn't depend on projection position.
     """
+    pos_vec = Vector(position)
     rot_euler = Euler(rotation, "XYZ")
-    transform = rot_euler.to_matrix().to_4x4()
+    transform = Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4()
 
     vertices: list[tuple[float, float, float]] = []
 
