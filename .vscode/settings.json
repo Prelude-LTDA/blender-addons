@@ -26,5 +26,8 @@
     },
     "files.associations": {
         "blender_manifest.toml": "toml"
+    },
+    "search.exclude": {
+        "addons/*/shared": true,
     }
 }
