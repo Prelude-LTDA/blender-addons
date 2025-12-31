@@ -59,6 +59,10 @@ class UVMAP_OT_add_modifier(bpy.types.Operator):
         modifier = obj.modifiers.new(name=MODIFIER_NAME, type="NODES")
         modifier.node_group = node_tree  # type: ignore[attr-defined]
 
+        # Hide the node group selector and manage panel to match built-in modifiers
+        modifier.show_group_selector = False  # type: ignore[attr-defined]
+        modifier.show_manage_panel = False  # type: ignore[attr-defined]
+
         self.report({"INFO"}, f"Added UV Map modifier to {obj.name}")
         return {"FINISHED"}
 

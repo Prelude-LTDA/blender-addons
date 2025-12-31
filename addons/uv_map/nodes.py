@@ -98,7 +98,13 @@ def get_or_create_uv_map_node_group() -> bpy.types.NodeTree:
     # First clean up the force-created groups
     _cleanup_reference_groups(reference_group)
     # Now create the actual group with reusable sub-groups
-    return create_uv_map_node_group()
+    node_group = create_uv_map_node_group()
+
+    # Hide the "Manage" panel in the modifier UI when added via asset browser
+    # (similar to built-in Array, Scatter on Surface modifiers)
+    node_group.show_modifier_manage_panel = False  # type: ignore[attr-defined]
+
+    return node_group
 
 
 def _create_main_interface(node_tree: bpy.types.NodeTree) -> None:
