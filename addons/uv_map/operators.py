@@ -296,6 +296,204 @@ def get_active_uv_map_node_group(context: Context) -> bpy.types.NodeTree | None:
     return node_tree
 
 
+def get_uv_map_node_group_defaults(  # noqa: PLR0912, PLR0915
+    node_tree: bpy.types.NodeTree,
+) -> dict[str, object] | None:
+    """Get the UV Map parameters from a node group's interface defaults.
+
+    Returns a dictionary with default values from the node group interface.
+    Returns None if the node tree is not a valid UV Map node group.
+    """
+    if not is_uv_map_node_group(node_tree):
+        return None
+
+    params: dict[str, object] = {}
+
+    # Iterate through interface items to get defaults
+    interface = node_tree.interface
+    if interface is None:
+        return params
+
+    for item in interface.items_tree:
+        if getattr(item, "item_type", None) != "SOCKET":
+            continue
+        if getattr(item, "in_out", None) != "INPUT":
+            continue
+
+        name = getattr(item, "name", None)
+        if name is None:
+            continue
+        default = getattr(item, "default_value", None)
+
+        # Handle Mapping Type menu
+        if name == SOCKET_MAPPING_TYPE:
+            # Menu defaults are stored as integer
+            if isinstance(default, int):
+                adjusted_index = default - 2
+                if 0 <= adjusted_index < len(MAPPING_TYPES):
+                    params["mapping_type"] = MAPPING_TYPES[adjusted_index][0]
+                else:
+                    params["mapping_type"] = MAPPING_PLANAR
+            else:
+                params["mapping_type"] = MAPPING_PLANAR
+        elif name == "Position":
+            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+                params["position"] = (
+                    float(default[0]),
+                    float(default[1]),
+                    float(default[2]),
+                )
+            else:
+                params["position"] = (0.0, 0.0, 0.0)
+        elif name == "Rotation":
+            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+                params["rotation"] = (
+                    float(default[0]),
+                    float(default[1]),
+                    float(default[2]),
+                )
+            else:
+                params["rotation"] = (0.0, 0.0, 0.0)
+        elif name == "Size":
+            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+                params["size"] = (
+                    float(default[0]),
+                    float(default[1]),
+                    float(default[2]),
+                )
+            else:
+                params["size"] = (1.0, 1.0, 1.0)
+        elif name == "U Tile":
+            params["u_tile"] = float(default) if default is not None else 1.0
+        elif name == "V Tile":
+            params["v_tile"] = float(default) if default is not None else 1.0
+        elif name == "U Offset":
+            params["u_offset"] = float(default) if default is not None else 0.0
+        elif name == "V Offset":
+            params["v_offset"] = float(default) if default is not None else 0.0
+        elif name == "UV Rotation":
+            params["uv_rotation"] = float(default) if default is not None else 0.0
+        elif name == "U Flip":
+            params["u_flip"] = bool(default) if default is not None else False
+        elif name == "V Flip":
+            params["v_flip"] = bool(default) if default is not None else False
+        elif name == "Cap":
+            params["cap"] = bool(default) if default is not None else False
+        elif name == "Normal-based":
+            params["normal_based"] = bool(default) if default is not None else False
+        elif name == "UV Map":
+            params["uv_map"] = str(default) if default is not None else "UVMap"
+
+    return params
+
+
+def get_uv_map_node_instance_params(  # noqa: PLR0912, PLR0915
+    node: bpy.types.Node,
+) -> dict[str, object] | None:
+    """Get the UV Map parameters from a node instance's inputs.
+
+    Reads the actual input values set on a specific UV Map node group instance,
+    not the node group's interface defaults.
+
+    Returns None if any relevant inputs are linked (can't evaluate without depsgraph).
+
+    Returns a dictionary with parameter values, or None if inputs can't be read.
+    """
+    node_tree = getattr(node, "node_tree", None)
+    if node_tree is None or not is_uv_map_node_group(node_tree):
+        return None
+
+    params: dict[str, object] = {}
+
+    # Read values from node inputs
+    for inp in node.inputs:
+        name = inp.name
+
+        # If any relevant input is linked, we can't evaluate - return None
+        if inp.is_linked:
+            # Skip non-relevant inputs (Geometry, Selection, UV Map name)
+            if name in ("Geometry", "Selection", "UV Map"):
+                continue
+            # Any other linked input means we can't show accurate overlay
+            return None
+
+        default = getattr(inp, "default_value", None)
+
+        # Handle Mapping Type menu
+        if name == SOCKET_MAPPING_TYPE:
+            # For node group instances, menu default_value is the string name
+            if isinstance(default, str):
+                # Match against our mapping types (case-insensitive)
+                default_upper = default.upper().replace(" ", "_")
+                matched = False
+                for mapping_id, mapping_name, _ in MAPPING_TYPES:
+                    if default_upper == mapping_id or default_upper == mapping_name.upper().replace(" ", "_"):
+                        params["mapping_type"] = mapping_id
+                        matched = True
+                        break
+                if not matched:
+                    params["mapping_type"] = MAPPING_PLANAR
+            elif isinstance(default, int):
+                # Fallback for integer index
+                if 0 <= default < len(MAPPING_TYPES):
+                    params["mapping_type"] = MAPPING_TYPES[default][0]
+                else:
+                    params["mapping_type"] = MAPPING_PLANAR
+            else:
+                params["mapping_type"] = MAPPING_PLANAR
+            continue
+
+        if name == "Position":
+            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+                params["position"] = (
+                    float(default[0]),
+                    float(default[1]),
+                    float(default[2]),
+                )
+            else:
+                params["position"] = (0.0, 0.0, 0.0)
+        elif name == "Rotation":
+            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+                params["rotation"] = (
+                    float(default[0]),
+                    float(default[1]),
+                    float(default[2]),
+                )
+            else:
+                params["rotation"] = (0.0, 0.0, 0.0)
+        elif name == "Size":
+            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+                params["size"] = (
+                    float(default[0]),
+                    float(default[1]),
+                    float(default[2]),
+                )
+            else:
+                params["size"] = (1.0, 1.0, 1.0)
+        elif name == "U Tile":
+            params["u_tile"] = float(default) if default is not None else 1.0
+        elif name == "V Tile":
+            params["v_tile"] = float(default) if default is not None else 1.0
+        elif name == "U Offset":
+            params["u_offset"] = float(default) if default is not None else 0.0
+        elif name == "V Offset":
+            params["v_offset"] = float(default) if default is not None else 0.0
+        elif name == "UV Rotation":
+            params["uv_rotation"] = float(default) if default is not None else 0.0
+        elif name == "U Flip":
+            params["u_flip"] = bool(default) if default is not None else False
+        elif name == "V Flip":
+            params["v_flip"] = bool(default) if default is not None else False
+        elif name == "Cap":
+            params["cap"] = bool(default) if default is not None else False
+        elif name == "Normal-based":
+            params["normal_based"] = bool(default) if default is not None else False
+        elif name == "UV Map":
+            params["uv_map"] = str(default) if default is not None else "UVMap"
+
+    return params
+
+
 def get_uv_map_modifier_params(  # noqa: PLR0912, PLR0915
     obj: bpy.types.Object,  # noqa: ARG001
     modifier: bpy.types.Modifier,

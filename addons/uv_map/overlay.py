@@ -39,7 +39,11 @@ from .constants import (
     OVERLAY_V_DIRECTION_COLOR,
 )
 from .nodes import is_uv_map_node_group
-from .operators import get_uv_map_modifier_params
+from .operators import (
+    get_uv_map_modifier_params,
+    get_uv_map_node_group_defaults,
+    get_uv_map_node_instance_params,
+)
 
 # Draw handler references
 _draw_handler: object | None = None
@@ -1960,8 +1964,11 @@ def _generate_uv_direction_vertices(  # noqa: PLR0915
         )
         v_proj_vertices.extend(verts)
 
-        # +X face: at x=+1, projects YZ (rotate -90° around Y to align Z->X)
-        x_rot = Euler((0, -math.pi / 2, 0), "XYZ").to_matrix().to_4x4()
+        # +X face: at x=+1, projects YZ (U=Y, V=Z in nodes)
+        # Rotate +90° around Z to map X->Y, then -90° around Y to face +X direction
+        # Combined: we need planar's U(X)->Y and V(Y)->Z
+        # Use rotation that swaps appropriately
+        x_rot = Euler((math.pi / 2, 0, math.pi / 2), "XYZ").to_matrix().to_4x4()
         x_face_offset = Matrix.Translation(Vector((1, 0, 0)))
         x_transform = transform @ x_face_offset @ x_rot
         verts, endpoint = _generate_uv_direction_line(
@@ -2454,7 +2461,7 @@ def _generate_uv_direction_vertices(  # noqa: PLR0915
     return u_vertices, v_vertices, u_proj_vertices, v_proj_vertices, u_labels, v_labels
 
 
-def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
+def _draw_overlay() -> None:  # noqa: PLR0912, PLR0915
     """Draw the UV map shape overlay in the 3D viewport."""
     global _cached_u_labels, _cached_v_labels  # noqa: PLW0603
     context = bpy.context
@@ -2467,27 +2474,67 @@ def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
     if context.area is None or context.area.type != "VIEW_3D":
         return
 
-    # Get active object
+    # Try to get parameters from multiple sources:
+    # 1. Active modifier on active object
+    # 2. UV map node group being edited in node editor
+
+    params: dict[str, object] | None = None
+    obj_matrix: Matrix | None = None
+
+    # First, try active modifier
     obj = context.active_object
-    if obj is None:
-        return
+    if obj is not None:
+        modifier = obj.modifiers.active
+        if modifier is not None and modifier.type == "NODES":
+            node_tree = getattr(modifier, "node_group", None)
+            if node_tree is not None and is_uv_map_node_group(node_tree):
+                params = get_uv_map_modifier_params(obj, modifier)
+                obj_matrix = obj.matrix_world
 
-    # Get active modifier
-    modifier = obj.modifiers.active
-    if modifier is None:
-        return
+    # If no modifier, check for UV map node group in node editor
+    if params is None and context.screen is not None:
+        # Look for a node editor with a UV map node group
+        for area in context.screen.areas:
+            if area.type != "NODE_EDITOR":
+                continue
+            space = area.spaces.active
+            if space is None or space.type != "NODE_EDITOR":
+                continue
+            # Check if it's editing a geometry node tree
+            if getattr(space, "tree_type", None) != "GeometryNodeTree":
+                continue
+            edit_tree = getattr(space, "edit_tree", None)
+            if edit_tree is None:
+                continue
 
-    # Check if it's a UV Map modifier
-    if modifier.type != "NODES":
-        return
+            # Use active object's matrix if available, otherwise identity
+            fallback_matrix = (
+                obj.matrix_world if obj is not None else Matrix.Identity(4)
+            )
 
-    node_tree = getattr(modifier, "node_group", None)
-    if node_tree is None or not is_uv_map_node_group(node_tree):
-        return
+            # Check if the edit_tree itself is a UV map node group
+            if is_uv_map_node_group(edit_tree):
+                # Get defaults from the node group interface
+                params = get_uv_map_node_group_defaults(edit_tree)
+                obj_matrix = fallback_matrix
+                break
 
-    # Get parameters from modifier
-    params = get_uv_map_modifier_params(obj, modifier)
-    if params is None:
+            # Also check if there's a selected node that is a UV Map node group
+            for node in edit_tree.nodes:
+                if not node.select:
+                    continue
+                if node.type != "GROUP":
+                    continue
+                node_group = getattr(node, "node_tree", None)
+                if node_group is not None and is_uv_map_node_group(node_group):
+                    # Get values from the node instance's inputs
+                    params = get_uv_map_node_instance_params(node)
+                    obj_matrix = fallback_matrix
+                    break
+            if params is not None:
+                break
+
+    if params is None or obj_matrix is None:
         return
 
     # Extract parameters with defaults
@@ -2517,10 +2564,7 @@ def _draw_overlay() -> None:  # noqa: PLR0911, PLR0912, PLR0915
     if len(rotation) > 3:
         rotation = rotation[:3]  # type: ignore[assignment]
 
-    # Apply object transform to get world-space coordinates
-    obj_matrix = obj.matrix_world
-
-    # Transform position, rotation, size to world space
+    # Transform position, rotation, size to world space (using obj_matrix set above)
     world_position = obj_matrix @ Vector(position)  # type: ignore[arg-type]
 
     # For rotation, we need to combine object rotation with UV map rotation

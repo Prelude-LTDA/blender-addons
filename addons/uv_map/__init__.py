@@ -32,8 +32,8 @@ _shared_module_names: tuple[str, ...] = (
 _module_names: tuple[str, ...] = (
     "constants",
     "nodes",
-    "overlay",
     "operators",
+    "overlay",
     "menus",
 )
 
