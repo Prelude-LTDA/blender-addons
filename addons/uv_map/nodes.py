@@ -71,7 +71,7 @@ def get_or_create_uv_map_node_group() -> bpy.types.NodeTree:
     Returns:
         Either an existing matching node group, or a newly created one.
     """
-    global _force_new_subgroups
+    global _force_new_subgroups  # noqa: PLW0603
 
     base_name = UV_MAP_NODE_GROUP_PREFIX
 
@@ -89,11 +89,10 @@ def get_or_create_uv_map_node_group() -> bpy.types.NodeTree:
         _force_new_subgroups = False
 
     # If an existing group was found, check if it matches structurally
-    if existing is not None:
-        if node_groups_match(existing, reference_group):
-            # Remove the reference group and its sub-groups, use existing
-            _cleanup_reference_groups(reference_group)
-            return existing
+    if existing is not None and node_groups_match(existing, reference_group):
+        # Remove the reference group and its sub-groups, use existing
+        _cleanup_reference_groups(reference_group)
+        return existing
 
     # No match found - clean up the temporary sub-groups and create permanent ones
     # First clean up the force-created groups
@@ -3688,7 +3687,7 @@ def needs_regeneration() -> bool:
     Returns:
         True if regeneration is needed, False otherwise.
     """
-    global _force_new_subgroups
+    global _force_new_subgroups  # noqa: PLW0603
 
     existing_groups = get_uv_map_node_groups()
     if not existing_groups:
@@ -3703,10 +3702,7 @@ def needs_regeneration() -> bool:
         _force_new_subgroups = False
 
     try:
-        for group in existing_groups:
-            if not node_groups_match(group, reference):
-                return True
-        return False
+        return any(not node_groups_match(group, reference) for group in existing_groups)
     finally:
         # Clean up the reference group and its sub-groups
         _cleanup_reference_groups(reference)

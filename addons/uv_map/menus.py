@@ -48,7 +48,7 @@ _registered_swap_menu = False
 
 def register_menus() -> None:
     """Register menu items."""
-    global _registered_add_menu, _registered_swap_menu
+    global _registered_add_menu, _registered_swap_menu  # noqa: PLW0603
 
     # Add to the Edit submenu of modifiers (appended at end)
     if hasattr(bpy.types, "OBJECT_MT_modifier_add_edit"):
@@ -82,7 +82,7 @@ def register_menus() -> None:
 
 def unregister_menus() -> None:
     """Unregister menu items."""
-    global _registered_add_menu, _registered_swap_menu
+    global _registered_add_menu, _registered_swap_menu  # noqa: PLW0603
 
     # Remove from Edit submenu
     if hasattr(bpy.types, "OBJECT_MT_modifier_add_edit"):

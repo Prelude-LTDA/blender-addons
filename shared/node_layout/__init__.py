@@ -43,7 +43,7 @@ def _trace_to_real_source(socket: bpy.types.NodeSocket) -> bpy.types.NodeSocket:
     return current
 
 
-def _remove_all_reroutes(
+def _remove_all_reroutes(  # noqa: PLR0912, PLR0915
     node_tree: bpy.types.NodeTree,
     nodes_to_layout: set[bpy.types.Node] | None = None,
 ) -> None:
@@ -105,12 +105,10 @@ def _remove_all_reroutes(
             continue
 
         # If filtering, only restore connections where BOTH endpoints are in our set
-        if nodes_to_layout is not None:
-            if (
-                real_source.node not in nodes_to_layout
-                or to_node not in nodes_to_layout
-            ):
-                continue
+        if nodes_to_layout is not None and (
+            real_source.node not in nodes_to_layout or to_node not in nodes_to_layout
+        ):
+            continue
 
         connections_to_restore.append((real_source, to_socket))
 
@@ -145,10 +143,7 @@ def _remove_all_reroutes(
                 while dest is not None and dest.type == "REROUTE":
                     # Find where this reroute outputs to (O(1) lookup)
                     next_links = outgoing_links.get(dest, [])
-                    if next_links:
-                        dest = next_links[0][0]
-                    else:
-                        dest = None
+                    dest = next_links[0][0] if next_links else None
                 # If final dest is outside our set, don't remove this reroute
                 if dest is not None and dest not in nodes_to_layout:
                     safe_to_remove = False
@@ -423,14 +418,14 @@ def _assign_reroutes_to_frames(
 
 
 def _get_connected_non_reroute_nodes(
-    node_tree: bpy.types.NodeTree,
+    _node_tree: bpy.types.NodeTree,
     reroute: bpy.types.Node,
 ) -> list[bpy.types.Node]:
     """Get all non-reroute nodes connected to a reroute (following reroute chains)."""
     connected: list[bpy.types.Node] = []
     visited_reroutes: set[bpy.types.Node] = set()
 
-    def trace_connections(current_reroute: bpy.types.Node) -> None:
+    def trace_connections(current_reroute: bpy.types.Node) -> None:  # noqa: PLR0912
         if current_reroute in visited_reroutes:
             return
         visited_reroutes.add(current_reroute)
@@ -940,8 +935,8 @@ def compute_node_columns(
             # Convert to column indices: (x - min_x) / column_width, rounded
             # Higher X = more to the right = lower column number (outputs on right)
             # So we negate to flip the order
-            for node in raw_positions:
-                relative_x = raw_positions[node] - min_x
+            for node, pos in raw_positions.items():
+                relative_x = pos - min_x
                 col_index = round(relative_x / column_width) if column_width > 0 else 0
                 raw_positions[node] = float(
                     -col_index
@@ -975,7 +970,7 @@ def compute_node_columns(
     return columns
 
 
-def layout_nodes_pcb_style(
+def layout_nodes_pcb_style(  # noqa: PLR0912, PLR0915
     node_tree: bpy.types.NodeTree,
     cell_width: float = 200.0,
     cell_height: float = 200.0,
@@ -1035,9 +1030,10 @@ def layout_nodes_pcb_style(
     if original_positions is None:
         original_positions = {}
         for node in node_tree.nodes:
-            if node.type not in ("FRAME", "REROUTE"):
-                if nodes_to_layout is None or node in nodes_to_layout:
-                    original_positions[node] = node.location.x
+            if node.type not in ("FRAME", "REROUTE") and (
+                nodes_to_layout is None or node in nodes_to_layout
+            ):
+                original_positions[node] = node.location.x
 
     # Step 0a: Remove existing reroutes and restore direct connections
     # This ensures repeated layouts produce consistent results
@@ -1056,10 +1052,11 @@ def layout_nodes_pcb_style(
         ui_scale = bpy.context.preferences.system.ui_scale
     max_node_width = 0.0
     for node in node_tree.nodes:
-        if node.type not in ("REROUTE", "FRAME"):
-            if nodes_to_layout is None or node in nodes_to_layout:
-                width = node.dimensions[0] / ui_scale
-                max_node_width = max(max_node_width, width)
+        if node.type not in ("REROUTE", "FRAME") and (
+            nodes_to_layout is None or node in nodes_to_layout
+        ):
+            width = node.dimensions[0] / ui_scale
+            max_node_width = max(max_node_width, width)
     if max_node_width <= 0:
         max_node_width = 200.0  # Fallback if nodes not drawn yet
     column_width = min(cell_width, max_node_width) + lane_gap
@@ -1304,7 +1301,7 @@ def _calculate_node_row_span(
     return max(1, rows_needed)
 
 
-def _build_virtual_grid(
+def _build_virtual_grid(  # noqa: PLR0912
     columns: dict[bpy.types.Node, int],
     vertical_align: str = "CENTER",
     respect_dimensions: bool = False,
@@ -1763,10 +1760,9 @@ def _optimize_routing_path(
             i = j + 1
         optimized = horiz_optimized
 
-    if collapse_adjacent:
-        # Rule 3: If after optimization, only one reroute remains at dest cell,
-        # and source is at X-1 (adjacent column), we can remove it entirely
-        if len(optimized) == 1 and from_cell[0] + 1 == to_cell[0]:
-            return []
+    # Rule 3: If after optimization, only one reroute remains at dest cell,
+    # and source is at X-1 (adjacent column), we can remove it entirely
+    if collapse_adjacent and len(optimized) == 1 and from_cell[0] + 1 == to_cell[0]:
+        return []
 
     return optimized

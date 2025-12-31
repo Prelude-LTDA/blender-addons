@@ -72,7 +72,7 @@ def _compute_node_fingerprint(node: bpy.types.Node) -> dict[str, Any]:
     return fingerprint
 
 
-def _compute_fingerprint(group: bpy.types.NodeTree, recurse: bool = True) -> str:
+def _compute_fingerprint(group: bpy.types.NodeTree, recurse: bool = True) -> str:  # noqa: PLR0912
     """Compute a deterministic fingerprint for a node group.
 
     The fingerprint captures:
@@ -100,13 +100,15 @@ def _compute_fingerprint(group: bpy.types.NodeTree, recurse: bool = True) -> str
         for item in interface.items_tree:
             if getattr(item, "item_type", None) != "SOCKET":
                 continue
-            sockets.append({
-                "name": getattr(item, "name", ""),
-                "socket_type": getattr(item, "socket_type", ""),
-                "in_out": getattr(item, "in_out", ""),
-                "hide_value": getattr(item, "hide_value", False),
-                "hide_in_modifier": getattr(item, "hide_in_modifier", False),
-            })
+            sockets.append(
+                {
+                    "name": getattr(item, "name", ""),
+                    "socket_type": getattr(item, "socket_type", ""),
+                    "in_out": getattr(item, "in_out", ""),
+                    "hide_value": getattr(item, "hide_value", False),
+                    "hide_in_modifier": getattr(item, "hide_in_modifier", False),
+                }
+            )
         data["interface"] = sockets
 
     # Nodes - use label as stable identifier if set, otherwise generate one
@@ -147,10 +149,12 @@ def _compute_fingerprint(group: bpy.types.NodeTree, recurse: bool = True) -> str
         to_id = node_ids.get(link.to_node)
         if from_id is None or to_id is None:
             continue
-        links.append({
-            "from": f"{from_id}:{link.from_socket.name}",
-            "to": f"{to_id}:{link.to_socket.name}",
-        })
+        links.append(
+            {
+                "from": f"{from_id}:{link.from_socket.name}",
+                "to": f"{to_id}:{link.to_socket.name}",
+            }
+        )
     # Sort links for determinism
     links.sort(key=lambda x: (x["from"], x["to"]))
     data["links"] = links

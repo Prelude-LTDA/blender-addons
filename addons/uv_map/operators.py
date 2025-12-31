@@ -337,7 +337,11 @@ def get_uv_map_node_group_defaults(  # noqa: PLR0912, PLR0915
             else:
                 params["mapping_type"] = MAPPING_PLANAR
         elif name == "Position":
-            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+            if (
+                default is not None
+                and hasattr(default, "__len__")
+                and len(default) >= 3
+            ):
                 params["position"] = (
                     float(default[0]),
                     float(default[1]),
@@ -346,7 +350,11 @@ def get_uv_map_node_group_defaults(  # noqa: PLR0912, PLR0915
             else:
                 params["position"] = (0.0, 0.0, 0.0)
         elif name == "Rotation":
-            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+            if (
+                default is not None
+                and hasattr(default, "__len__")
+                and len(default) >= 3
+            ):
                 params["rotation"] = (
                     float(default[0]),
                     float(default[1]),
@@ -355,7 +363,11 @@ def get_uv_map_node_group_defaults(  # noqa: PLR0912, PLR0915
             else:
                 params["rotation"] = (0.0, 0.0, 0.0)
         elif name == "Size":
-            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+            if (
+                default is not None
+                and hasattr(default, "__len__")
+                and len(default) >= 3
+            ):
                 params["size"] = (
                     float(default[0]),
                     float(default[1]),
@@ -427,7 +439,10 @@ def get_uv_map_node_instance_params(  # noqa: PLR0912, PLR0915
                 default_upper = default.upper().replace(" ", "_")
                 matched = False
                 for mapping_id, mapping_name, _ in MAPPING_TYPES:
-                    if default_upper == mapping_id or default_upper == mapping_name.upper().replace(" ", "_"):
+                    if (
+                        default_upper == mapping_id
+                        or default_upper == mapping_name.upper().replace(" ", "_")
+                    ):
                         params["mapping_type"] = mapping_id
                         matched = True
                         break
@@ -444,7 +459,11 @@ def get_uv_map_node_instance_params(  # noqa: PLR0912, PLR0915
             continue
 
         if name == "Position":
-            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+            if (
+                default is not None
+                and hasattr(default, "__len__")
+                and len(default) >= 3
+            ):
                 params["position"] = (
                     float(default[0]),
                     float(default[1]),
@@ -453,7 +472,11 @@ def get_uv_map_node_instance_params(  # noqa: PLR0912, PLR0915
             else:
                 params["position"] = (0.0, 0.0, 0.0)
         elif name == "Rotation":
-            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+            if (
+                default is not None
+                and hasattr(default, "__len__")
+                and len(default) >= 3
+            ):
                 params["rotation"] = (
                     float(default[0]),
                     float(default[1]),
@@ -462,7 +485,11 @@ def get_uv_map_node_instance_params(  # noqa: PLR0912, PLR0915
             else:
                 params["rotation"] = (0.0, 0.0, 0.0)
         elif name == "Size":
-            if default is not None and hasattr(default, "__len__") and len(default) >= 3:
+            if (
+                default is not None
+                and hasattr(default, "__len__")
+                and len(default) >= 3
+            ):
                 params["size"] = (
                     float(default[0]),
                     float(default[1]),
