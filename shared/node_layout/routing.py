@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from .types import CellCoord
+
 if TYPE_CHECKING:
     from .types import PendingConnection, VirtualGrid
 
@@ -16,13 +18,13 @@ __all__ = [
 
 
 def optimize_routing_path(
-    path: list[tuple[int, int]],
-    from_cell: tuple[int, int],
-    to_cell: tuple[int, int],
+    path: list[CellCoord],
+    from_cell: CellCoord,
+    to_cell: CellCoord,
     collapse_vertical: bool = True,
     collapse_horizontal: bool = True,
     collapse_adjacent: bool = True,
-) -> list[tuple[int, int]]:
+) -> list[CellCoord]:
     """Optimize routing path by melding unnecessary reroutes.
 
     Rule 1: Collapse vertical runs - if reroutes are stacked vertically (same X),
@@ -47,7 +49,7 @@ def optimize_routing_path(
     if not path:
         return path
 
-    optimized: list[tuple[int, int]] = []
+    optimized: list[CellCoord] = []
     if collapse_vertical:
         # Rule 1: Collapse vertical runs - keep only the last reroute of each vertical segment
         i = 0
@@ -62,7 +64,7 @@ def optimize_routing_path(
 
     if collapse_horizontal:
         # Rule 2: Collapse horizontal runs of 3+ reroutes - keep first and last
-        horiz_optimized: list[tuple[int, int]] = []
+        horiz_optimized: list[CellCoord] = []
         i = 0
         while i < len(optimized):
             # Find the end of the current horizontal run (same Y)
@@ -83,42 +85,42 @@ def optimize_routing_path(
 
     # Rule 3: If after optimization, only one reroute remains at dest cell,
     # and source is at X-1 (adjacent column), we can remove it entirely
-    if collapse_adjacent and len(optimized) == 1 and from_cell[0] + 1 == to_cell[0]:
+    if collapse_adjacent and len(optimized) == 1 and from_cell.x + 1 == to_cell.x:
         return []
 
     return optimized
 
 
-def build_routing_path(conn: PendingConnection) -> list[tuple[int, int]]:
+def build_routing_path(conn: PendingConnection) -> list[CellCoord]:
     """Build the raw routing path for a connection (before optimization).
 
     Args:
         conn: The pending connection to build a path for
 
     Returns:
-        List of (x, y) cell coordinates representing the routing path
+        List of CellCoord representing the routing path
     """
     from_x, from_y = conn.from_cell
     to_x, to_y = conn.to_cell
 
-    path: list[tuple[int, int]] = []
+    path: list[CellCoord] = []
 
     # Start at cell to the right of source (X+1)
     current_x = from_x + 1
     current_y = from_y
-    path.append((current_x, current_y))
+    path.append(CellCoord(current_x, current_y))
 
     # Then Y movement (vertical), then X movement (horizontal)
     y_step = 1 if to_y > current_y else -1
     while current_y != to_y:
         current_y += y_step
-        path.append((current_x, current_y))
+        path.append(CellCoord(current_x, current_y))
 
     # X movement (horizontal towards destination)
     x_step = 1 if to_x > current_x else -1
     while current_x != to_x:
         current_x += x_step
-        path.append((current_x, current_y))
+        path.append(CellCoord(current_x, current_y))
 
     return path
 

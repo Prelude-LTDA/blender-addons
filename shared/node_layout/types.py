@@ -6,16 +6,33 @@ Contains dataclasses and core types used across the layout modules.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import bpy
 
 __all__ = [
+    "CellCoord",
     "GridCell",
     "PendingConnection",
     "SavedFrame",
+    "SourceKey",
     "VirtualGrid",
     "VirtualReroute",
 ]
+
+
+class CellCoord(NamedTuple):
+    """Coordinates of a cell in the virtual grid."""
+
+    x: int
+    y: int
+
+
+class SourceKey(NamedTuple):
+    """Key identifying a connection source for reroute reuse."""
+
+    cell: CellCoord
+    socket_id: str
 
 
 @dataclass
@@ -37,7 +54,7 @@ class SavedFrame:
 class VirtualReroute:
     """A reroute node in the virtual grid, before realization."""
 
-    source_key: tuple[int, int, str]  # (source_cell_x, source_cell_y, socket_id)
+    source_key: SourceKey
     blender_node: bpy.types.Node | None = None
     used: bool = False  # Whether this reroute is actually used after optimization
 
@@ -49,10 +66,10 @@ class GridCell:
     x: int
     y: int
     node: bpy.types.Node | None = None
-    # Reroutes keyed by source for reuse: (src_x, src_y, socket_id) -> VirtualReroute
-    reroutes: dict[tuple[int, int, str], VirtualReroute] = field(default_factory=dict)
+    # Reroutes keyed by source for reuse
+    reroutes: dict[SourceKey, VirtualReroute] = field(default_factory=dict)
 
-    def get_or_create_reroute(self, source_key: tuple[int, int, str]) -> VirtualReroute:
+    def get_or_create_reroute(self, source_key: SourceKey) -> VirtualReroute:
         """Get existing reroute for source or create new one."""
         if source_key not in self.reroutes:
             self.reroutes[source_key] = VirtualReroute(source_key=source_key)
@@ -65,22 +82,22 @@ class PendingConnection:
 
     from_socket: bpy.types.NodeSocket
     to_socket: bpy.types.NodeSocket
-    from_cell: tuple[int, int]
-    to_cell: tuple[int, int]
-    source_key: tuple[int, int, str]  # For reroute reuse
+    from_cell: CellCoord
+    to_cell: CellCoord
+    source_key: SourceKey
 
 
 class VirtualGrid:
     """Virtual grid for planning node layout before realization."""
 
     def __init__(self) -> None:
-        self.cells: dict[tuple[int, int], GridCell] = {}
+        self.cells: dict[CellCoord, GridCell] = {}
         self.pending_connections: list[PendingConnection] = []
-        self.node_to_cell: dict[bpy.types.Node, tuple[int, int]] = {}
+        self.node_to_cell: dict[bpy.types.Node, CellCoord] = {}
 
     def get_or_create_cell(self, x: int, y: int) -> GridCell:
         """Get existing cell or create new one."""
-        key = (x, y)
+        key = CellCoord(x, y)
         if key not in self.cells:
             self.cells[key] = GridCell(x=x, y=y)
         return self.cells[key]
@@ -89,7 +106,7 @@ class VirtualGrid:
         """Place a node in the grid."""
         cell = self.get_or_create_cell(x, y)
         cell.node = node
-        self.node_to_cell[node] = (x, y)
+        self.node_to_cell[node] = CellCoord(x, y)
 
     def add_connection(
         self,
@@ -106,7 +123,7 @@ class VirtualGrid:
         to_cell = self.node_to_cell[to_node]
 
         # Source key for reroute reuse: based on originating cell and socket
-        source_key = (from_cell[0], from_cell[1], from_socket.identifier)
+        source_key = SourceKey(from_cell, from_socket.identifier)
 
         self.pending_connections.append(
             PendingConnection(
