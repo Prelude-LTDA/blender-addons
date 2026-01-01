@@ -38,6 +38,13 @@ from .grid import (
     collect_connections,
     estimate_node_height,
 )
+from .routing import (
+    build_routing_path,
+    compute_cell_positions,
+    compute_lane_areas,
+    mark_used_reroutes,
+    optimize_routing_path,
+)
 from .types import (
     PendingConnection,
     SavedFrame,
@@ -57,16 +64,22 @@ __all__ = [
     # Graph utilities (from graph.py)
     "build_connection_maps",
     "build_link_adjacency",
+    # Routing utilities (from routing.py)
+    "build_routing_path",
     # Grid utilities (from grid.py)
     "build_virtual_grid",
     "calculate_node_row_span",
     "collect_connections",
+    "compute_cell_positions",
+    "compute_lane_areas",
     "compute_node_columns",
     "compute_node_depths",
     "compute_node_input_depths",
     "estimate_node_height",
     # Main layout function
     "layout_nodes_pcb_style",
+    "mark_used_reroutes",
+    "optimize_routing_path",
     # Frame utilities (from frames.py)
     "remove_all_frames",
     "remove_all_reroutes",
@@ -207,7 +220,7 @@ def layout_nodes_pcb_style(  # noqa: PLR0912, PLR0915
     grid.route_all_connections()
 
     # Step 5: Mark which reroutes are actually used after optimization
-    _mark_used_reroutes(
+    mark_used_reroutes(
         grid,
         collapse_vertical=collapse_vertical,
         collapse_horizontal=collapse_horizontal,
@@ -271,134 +284,6 @@ def layout_nodes_pcb_style(  # noqa: PLR0912, PLR0915
     return created_reroutes
 
 
-def _mark_used_reroutes(
-    grid: VirtualGrid,
-    collapse_vertical: bool = True,
-    collapse_horizontal: bool = True,
-    collapse_adjacent: bool = True,
-) -> None:
-    """Mark which reroutes are actually used after path optimization."""
-    for conn in grid.pending_connections:
-        from_x, from_y = conn.from_cell
-        to_x, to_y = conn.to_cell
-
-        # Build the path of cells (same logic as _realize_connection)
-        path: list[tuple[int, int]] = []
-        current_x = from_x + 1
-        current_y = from_y
-        path.append((current_x, current_y))
-
-        y_step = 1 if to_y > current_y else -1
-        while current_y != to_y:
-            current_y += y_step
-            path.append((current_x, current_y))
-
-        x_step = 1 if to_x > current_x else -1
-        while current_x != to_x:
-            current_x += x_step
-            path.append((current_x, current_y))
-
-        # Apply optimization
-        optimized_path = _optimize_routing_path(
-            path,
-            conn.from_cell,
-            conn.to_cell,
-            collapse_vertical=collapse_vertical,
-            collapse_horizontal=collapse_horizontal,
-            collapse_adjacent=collapse_adjacent,
-        )
-
-        # Mark reroutes in the optimized path as used
-        for cell_coord in optimized_path:
-            cell = grid.cells.get(cell_coord)
-            if cell is None:
-                continue
-            reroute = cell.reroutes.get(conn.source_key)
-            if reroute is not None:
-                reroute.used = True
-
-
-def _compute_lane_areas(
-    grid: VirtualGrid,
-    lane_width: float,
-) -> tuple[dict[int, float], dict[int, float]]:
-    """Compute lane area for each column and row based on max reroutes.
-
-    Returns (col_lane_area, row_lane_area) dictionaries.
-    """
-    col_max_reroutes = grid.get_max_used_reroutes_per_column()
-    row_max_reroutes = grid.get_max_used_reroutes_per_row()
-    min_x, max_x, min_y, max_y = grid.get_grid_bounds()
-
-    # For each column, compute the lane area needed
-    col_lane_area: dict[int, float] = {}
-    for x in range(min_x, max_x + 1):
-        col_reroutes = col_max_reroutes.get(x, 0)
-        # Find max row reroutes that intersect this column
-        max_row_reroutes = max(
-            (
-                row_max_reroutes.get(y, 0)
-                for y in range(min_y, max_y + 1)
-                if (x, y) in grid.cells
-            ),
-            default=0,
-        )
-        lane_count = max(col_reroutes, max_row_reroutes, 1)
-        col_lane_area[x] = lane_width * lane_count
-
-    # For each row, compute the lane area needed
-    row_lane_area: dict[int, float] = {}
-    for y in range(min_y, max_y + 1):
-        row_reroutes = row_max_reroutes.get(y, 0)
-        # Find max col reroutes that intersect this row
-        max_col_reroutes = max(
-            (
-                col_max_reroutes.get(x, 0)
-                for x in range(min_x, max_x + 1)
-                if (x, y) in grid.cells
-            ),
-            default=0,
-        )
-        lane_count = max(row_reroutes, max_col_reroutes, 1)
-        row_lane_area[y] = lane_width * lane_count
-
-    return col_lane_area, row_lane_area
-
-
-def _compute_cell_positions(
-    grid: VirtualGrid,
-    col_lane_area: dict[int, float],
-    row_lane_area: dict[int, float],
-    cell_width: float,
-    cell_height: float,
-    lane_width: float,
-    lane_gap: float,
-) -> tuple[dict[int, float], dict[int, float]]:
-    """Compute cumulative X/Y positions for each column/row.
-
-    Returns (col_x_start, row_y_start) dictionaries.
-    """
-    min_x, max_x, min_y, max_y = grid.get_grid_bounds()
-
-    # Compute cumulative X positions for each column
-    col_x_start: dict[int, float] = {}
-    current_x = 0.0
-    for x in range(min_x, max_x + 1):
-        col_x_start[x] = current_x
-        lane_area = col_lane_area.get(x, lane_width)
-        current_x += lane_gap + lane_area + cell_width
-
-    # Compute cumulative Y positions for each row
-    row_y_start: dict[int, float] = {}
-    current_y = 0.0
-    for y in range(min_y, max_y + 1):
-        row_y_start[y] = current_y
-        lane_area = row_lane_area.get(y, lane_width)
-        current_y += lane_gap + lane_area + cell_height
-
-    return col_x_start, row_y_start
-
-
 def _realize_layout(
     node_tree: bpy.types.NodeTree,
     grid: VirtualGrid,
@@ -413,10 +298,10 @@ def _realize_layout(
 ) -> None:
     """Realize the virtual grid layout in Blender."""
     # Calculate per-column and per-row lane areas
-    col_lane_area, row_lane_area = _compute_lane_areas(grid, lane_width)
+    col_lane_area, row_lane_area = compute_lane_areas(grid, lane_width)
 
     # Calculate cumulative positions
-    col_x_start, row_y_start = _compute_cell_positions(
+    col_x_start, row_y_start = compute_cell_positions(
         grid,
         col_lane_area,
         row_lane_area,
@@ -515,31 +400,11 @@ def _realize_connection(
     collapse_adjacent: bool = True,
 ) -> None:
     """Create the actual Blender links for a routed connection."""
-    from_x, from_y = conn.from_cell
-    to_x, to_y = conn.to_cell
-
     # Build the path of cells this connection travels through
-    path: list[tuple[int, int]] = []
-
-    # Start at cell to the right of source (X+1)
-    current_x = from_x + 1
-    current_y = from_y
-    path.append((current_x, current_y))
-
-    # Y movement first (taxicab: vertical then horizontal)
-    y_step = 1 if to_y > current_y else -1
-    while current_y != to_y:
-        current_y += y_step
-        path.append((current_x, current_y))
-
-    # X movement (horizontal towards destination)
-    x_step = 1 if to_x > current_x else -1
-    while current_x != to_x:
-        current_x += x_step
-        path.append((current_x, current_y))
+    path = build_routing_path(conn)
 
     # Optimize path by melding unnecessary reroutes
-    path = _optimize_routing_path(
+    path = optimize_routing_path(
         path,
         conn.from_cell,
         conn.to_cell,
@@ -565,66 +430,3 @@ def _realize_connection(
 
     # Final link to destination
     node_tree.links.new(prev_socket, conn.to_socket)
-
-
-def _optimize_routing_path(
-    path: list[tuple[int, int]],
-    from_cell: tuple[int, int],
-    to_cell: tuple[int, int],
-    collapse_vertical: bool = True,
-    collapse_horizontal: bool = True,
-    collapse_adjacent: bool = True,
-) -> list[tuple[int, int]]:
-    """Optimize routing path by melding unnecessary reroutes.
-
-    Rule 1: Collapse vertical runs - if reroutes are stacked vertically (same X),
-            keep only the last one in the run.
-    Rule 2: Collapse horizontal runs of 3+ - if reroutes are in a horizontal line (same Y),
-            keep only the first and last, removing internal reroutes.
-    Rule 3: Adjacent column meld - if after optimization only one reroute remains
-            at the destination cell, and the source is in the adjacent column (X-1),
-            we can skip it entirely for a direct node-to-node connection.
-    """
-    if not path:
-        return path
-
-    optimized: list[tuple[int, int]] = []
-    if collapse_vertical:
-        # Rule 1: Collapse vertical runs - keep only the last reroute of each vertical segment
-        i = 0
-        while i < len(path):
-            j = i
-            while j + 1 < len(path) and path[j + 1][0] == path[i][0]:
-                j += 1
-            optimized.append(path[j])
-            i = j + 1
-    else:
-        optimized = path[:]
-
-    if collapse_horizontal:
-        # Rule 2: Collapse horizontal runs of 3+ reroutes - keep first and last
-        horiz_optimized: list[tuple[int, int]] = []
-        i = 0
-        while i < len(optimized):
-            # Find the end of the current horizontal run (same Y)
-            j = i
-            while j + 1 < len(optimized) and optimized[j + 1][1] == optimized[i][1]:
-                j += 1
-            run_length = j - i + 1
-            if run_length >= 3:
-                # Keep only first and last of this horizontal run
-                horiz_optimized.append(optimized[i])
-                horiz_optimized.append(optimized[j])
-            else:
-                # Keep all (1 or 2 reroutes)
-                for k in range(i, j + 1):
-                    horiz_optimized.append(optimized[k])
-            i = j + 1
-        optimized = horiz_optimized
-
-    # Rule 3: If after optimization, only one reroute remains at dest cell,
-    # and source is at X-1 (adjacent column), we can remove it entirely
-    if collapse_adjacent and len(optimized) == 1 and from_cell[0] + 1 == to_cell[0]:
-        return []
-
-    return optimized
