@@ -16,16 +16,17 @@ Voxel-based terrain generation and editing tools for Blender 5.0+.
 
 ```
 voxel-terrain/
-├── __init__.py              # Main addon entry point with reloading support
-├── operators.py             # Operator classes
-├── panels.py                # UI panel classes
-├── blender_manifest.toml    # Blender 5.0+ extension manifest
-├── pyproject.toml           # Python project config (dev tools)
-├── pyrightconfig.json       # Pyright configuration
-├── .vscode/
-│   ├── settings.json        # VS Code settings
-│   └── extensions.json      # Recommended extensions
-├── .gitignore
+├── addons/
+│   ├── node_layout/         # Auto-layout addon for node editors
+│   ├── uv_map/               # UV Map modifier addon
+│   └── voxel_terrain/        # Main voxel terrain addon
+├── shared/                   # Shared modules used across addons
+│   ├── node_layout/          # PCB-style node layout algorithm
+│   ├── uv_map/               # UV map node generation
+│   └── node_group_compare.py # Node group comparison utilities
+├── scripts/                  # Build and utility scripts
+├── pyproject.toml            # Python project config (dev tools)
+├── pyrightconfig.json        # Pyright configuration
 └── README.md
 ```
 
@@ -66,13 +67,13 @@ Create a symlink in Blender's extensions directory:
 
 ```bash
 # macOS
-ln -s /path/to/this/folder ~/Library/Application\ Support/Blender/5.0/extensions/user_default/hello_world_addon
+ln -s /path/to/addons/voxel_terrain ~/Library/Application\ Support/Blender/5.0/extensions/user_default/voxel_terrain
 
 # Linux
-ln -s /path/to/this/folder ~/.config/blender/5.0/extensions/user_default/hello_world_addon
+ln -s /path/to/addons/voxel_terrain ~/.config/blender/5.0/extensions/user_default/voxel_terrain
 
 # Windows (run as admin)
-mklink /D "%APPDATA%\Blender Foundation\Blender\5.0\extensions\user_default\hello_world_addon" "C:\path\to\this\folder"
+mklink /D "%APPDATA%\Blender Foundation\Blender\5.0\extensions\user_default\voxel_terrain" "C:\path\to\addons\voxel_terrain"
 ```
 
 ### Option 2: Install from Disk
@@ -86,7 +87,7 @@ mklink /D "%APPDATA%\Blender Foundation\Blender\5.0\extensions\user_default\hell
 1. Open Blender 5.0+
 2. Enable the addon in Preferences → Add-ons
 3. Press `N` in the 3D Viewport to open the sidebar
-4. Find the "Hello" tab
+4. Find the "Voxel Terrain" tab
 
 ## Linting & Type Checking
 

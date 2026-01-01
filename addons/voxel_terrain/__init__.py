@@ -2,9 +2,10 @@
 Voxel Terrain - Voxel-based terrain generation and editing tools for Blender.
 
 This addon provides:
-- Type annotations
-- Proper module reloading support
-- Separate modules for operators and panels
+- Chunk-based terrain generation with LOD support
+- Interactive progress display during generation
+- Viewport overlays for chunk and voxel grid visualization
+- Export functionality for terrain data
 """
 
 from __future__ import annotations
