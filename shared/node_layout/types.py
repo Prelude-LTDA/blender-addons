@@ -58,11 +58,6 @@ class GridCell:
             self.reroutes[source_key] = VirtualReroute(source_key=source_key)
         return self.reroutes[source_key]
 
-    @property
-    def reroute_count(self) -> int:
-        """Number of reroutes in this cell."""
-        return len(self.reroutes)
-
 
 @dataclass
 class PendingConnection:
@@ -155,12 +150,6 @@ class VirtualGrid:
             current_x += x_step
             cell = self.get_or_create_cell(current_x, current_y)
             cell.get_or_create_reroute(conn.source_key)
-
-    def get_max_reroutes(self) -> int:
-        """Get the maximum number of reroutes in any cell."""
-        if not self.cells:
-            return 0
-        return max(cell.reroute_count for cell in self.cells.values())
 
     def get_max_used_reroutes_per_column(self) -> dict[int, int]:
         """Get the maximum number of used reroutes for each column (X)."""

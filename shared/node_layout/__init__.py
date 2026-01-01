@@ -136,11 +136,12 @@ def layout_nodes_pcb_style(  # noqa: PLR0912, PLR0915
         use_gravity: Pull nodes closer together when gaps are large
         vertical_align: Vertical alignment of nodes in cells (TOP, CENTER, BOTTOM)
         collapse_vertical: Whether to collapse vertical runs of reroutes (default: True)
+        collapse_horizontal: Whether to collapse horizontal runs of 3+ reroutes (default: True)
         collapse_adjacent: Whether to collapse adjacent reroutes in neighboring columns (default: True)
         snap_to_grid: Whether to snap final positions to the editor grid (default: False)
         grid_size: Size of the grid to snap to (default: 20.0, Blender's default)
         respect_dimensions: If True, measure actual node heights and have tall nodes span
-            multiple grid rows to prevent vertical overlapping (default: False).
+            multiple grid rows to prevent vertical overlapping (default: True).
             Note: Requires nodes to have been drawn at least once for dimensions to be available.
         original_positions: Pre-captured X positions for "position" sorting method.
             If None and sorting_method is "position", positions are captured at start of layout.
