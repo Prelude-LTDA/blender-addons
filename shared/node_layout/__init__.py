@@ -11,9 +11,18 @@ A general-purpose layout algorithm that arranges nodes like an FPGA:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
 import bpy
+
+from .consts import (
+    NODE_HEADER_HEIGHT,
+    SOCKET_BASE_HEIGHT,
+    SOCKET_HEIGHT_MULTIPLIERS,
+)
+from .types import (
+    PendingConnection,
+    SavedFrame,
+    VirtualGrid,
+)
 
 
 def _trace_to_real_source(socket: bpy.types.NodeSocket) -> bpy.types.NodeSocket:
@@ -169,21 +178,6 @@ def _remove_all_reroutes(  # noqa: PLR0912, PLR0915
         # Check if connection already exists (O(1) lookup)
         if (from_socket, to_socket) not in existing_connections:
             node_tree.links.new(from_socket, to_socket)
-
-
-@dataclass
-class SavedFrame:
-    """Information needed to recreate a frame after layout."""
-
-    name: str
-    label: str
-    color: tuple[float, float, float]
-    use_custom_color: bool
-    label_size: int
-    # Children stored by name since node references become invalid after removal
-    child_node_names: list[str]
-    # Parent frame name (for nested frames), or None if top-level
-    parent_frame_name: str | None
 
 
 def _save_all_frames(
@@ -454,160 +448,6 @@ def _get_connected_non_reroute_nodes(
 
     trace_connections(reroute)
     return connected
-
-
-@dataclass
-class VirtualReroute:
-    """A reroute node in the virtual grid, before realization."""
-
-    source_key: tuple[int, int, str]  # (source_cell_x, source_cell_y, socket_id)
-    blender_node: bpy.types.Node | None = None
-    used: bool = False  # Whether this reroute is actually used after optimization
-
-
-@dataclass
-class GridCell:
-    """A cell in the virtual grid."""
-
-    x: int
-    y: int
-    node: bpy.types.Node | None = None
-    # Reroutes keyed by source for reuse: (src_x, src_y, socket_id) -> VirtualReroute
-    reroutes: dict[tuple[int, int, str], VirtualReroute] = field(default_factory=dict)
-
-    def get_or_create_reroute(self, source_key: tuple[int, int, str]) -> VirtualReroute:
-        """Get existing reroute for source or create new one."""
-        if source_key not in self.reroutes:
-            self.reroutes[source_key] = VirtualReroute(source_key=source_key)
-        return self.reroutes[source_key]
-
-    @property
-    def reroute_count(self) -> int:
-        """Number of reroutes in this cell."""
-        return len(self.reroutes)
-
-
-@dataclass
-class PendingConnection:
-    """A connection to be routed through the grid."""
-
-    from_socket: bpy.types.NodeSocket
-    to_socket: bpy.types.NodeSocket
-    from_cell: tuple[int, int]
-    to_cell: tuple[int, int]
-    source_key: tuple[int, int, str]  # For reroute reuse
-
-
-class VirtualGrid:
-    """Virtual grid for planning node layout before realization."""
-
-    def __init__(self) -> None:
-        self.cells: dict[tuple[int, int], GridCell] = {}
-        self.pending_connections: list[PendingConnection] = []
-        self.node_to_cell: dict[bpy.types.Node, tuple[int, int]] = {}
-
-    def get_or_create_cell(self, x: int, y: int) -> GridCell:
-        """Get existing cell or create new one."""
-        key = (x, y)
-        if key not in self.cells:
-            self.cells[key] = GridCell(x=x, y=y)
-        return self.cells[key]
-
-    def place_node(self, node: bpy.types.Node, x: int, y: int) -> None:
-        """Place a node in the grid."""
-        cell = self.get_or_create_cell(x, y)
-        cell.node = node
-        self.node_to_cell[node] = (x, y)
-
-    def add_connection(
-        self,
-        from_socket: bpy.types.NodeSocket,
-        to_socket: bpy.types.NodeSocket,
-        from_node: bpy.types.Node,
-        to_node: bpy.types.Node,
-    ) -> None:
-        """Add a connection to be routed."""
-        if from_node not in self.node_to_cell or to_node not in self.node_to_cell:
-            return
-
-        from_cell = self.node_to_cell[from_node]
-        to_cell = self.node_to_cell[to_node]
-
-        # Source key for reroute reuse: based on originating cell and socket
-        source_key = (from_cell[0], from_cell[1], from_socket.identifier)
-
-        self.pending_connections.append(
-            PendingConnection(
-                from_socket=from_socket,
-                to_socket=to_socket,
-                from_cell=from_cell,
-                to_cell=to_cell,
-                source_key=source_key,
-            )
-        )
-
-    def route_all_connections(self) -> None:
-        """Route all pending connections through the grid using taxicab geometry."""
-        for conn in self.pending_connections:
-            self._route_connection(conn)
-
-    def _route_connection(self, conn: PendingConnection) -> None:
-        """Route a single connection: exit to X+1, then Y, then X to dest cell."""
-        from_x, from_y = conn.from_cell
-        to_x, to_y = conn.to_cell
-
-        # Start at cell to the right of source (X+1) for output routing
-        current_x = from_x + 1
-        current_y = from_y
-
-        # Create/get reroute in the first routing cell (right of source)
-        cell = self.get_or_create_cell(current_x, current_y)
-        cell.get_or_create_reroute(conn.source_key)
-
-        # Navigate Y first (vertical)
-        y_step = 1 if to_y > current_y else -1
-        while current_y != to_y:
-            current_y += y_step
-            cell = self.get_or_create_cell(current_x, current_y)
-            cell.get_or_create_reroute(conn.source_key)
-
-        # Navigate X (horizontal towards destination)
-        # to_x > current_x means destination is further right
-        x_step = 1 if to_x > current_x else -1
-        while current_x != to_x:
-            current_x += x_step
-            cell = self.get_or_create_cell(current_x, current_y)
-            cell.get_or_create_reroute(conn.source_key)
-
-    def get_max_reroutes(self) -> int:
-        """Get the maximum number of reroutes in any cell."""
-        if not self.cells:
-            return 0
-        return max(cell.reroute_count for cell in self.cells.values())
-
-    def get_max_used_reroutes_per_column(self) -> dict[int, int]:
-        """Get the maximum number of used reroutes for each column (X)."""
-        col_max: dict[int, int] = {}
-        for (x, _y), cell in self.cells.items():
-            used_count = sum(1 for r in cell.reroutes.values() if r.used)
-            col_max[x] = max(col_max.get(x, 0), used_count)
-        return col_max
-
-    def get_max_used_reroutes_per_row(self) -> dict[int, int]:
-        """Get the maximum number of used reroutes for each row (Y)."""
-        row_max: dict[int, int] = {}
-        for (_x, y), cell in self.cells.items():
-            used_count = sum(1 for r in cell.reroutes.values() if r.used)
-            row_max[y] = max(row_max.get(y, 0), used_count)
-        return row_max
-
-    def get_grid_bounds(self) -> tuple[int, int, int, int]:
-        """Get (min_x, max_x, min_y, max_y) of the grid."""
-        if not self.cells:
-            return (0, 0, 0, 0)
-        xs = [k[0] for k in self.cells]
-        ys = [k[1] for k in self.cells]
-        return (min(xs), max(xs), min(ys), max(ys))
 
 
 def _build_link_adjacency(
@@ -1165,35 +1005,6 @@ def layout_nodes_pcb_style(  # noqa: PLR0912, PLR0915
     return created_reroutes
 
 
-# Socket type multipliers for height estimation (when NOT connected)
-# Some socket types render larger UI elements when displaying input fields
-# When connected, all sockets are effectively 1 row tall
-_SOCKET_HEIGHT_MULTIPLIERS: dict[str, float] = {
-    # Vector types (show X, Y, Z fields when not connected)
-    "VECTOR": 3.0,
-    "NodeSocketVector": 3.0,
-    "NodeSocketVectorDirection": 3.0,
-    "NodeSocketVectorEuler": 3.0,
-    "NodeSocketVectorTranslation": 3.0,
-    "NodeSocketVectorVelocity": 3.0,
-    "NodeSocketVectorAcceleration": 3.0,
-    "NodeSocketVectorXYZ": 3.0,
-    # Rotation (shows X, Y, Z, W or euler when not connected)
-    "ROTATION": 3.0,
-    "NodeSocketRotation": 3.0,
-    # Color types - inline color picker, always 1 row
-    # (no multiplier needed, defaults to 1.0)
-    # Matrix (4x4 = 16 values, but usually collapsed)
-    "MATRIX": 2.0,
-    "NodeSocketMatrix": 2.0,
-    # Default for standard types (float, int, bool, string, color, etc.) is 1.0
-}
-
-# Base height estimates (in pixels)
-_NODE_HEADER_HEIGHT = 30.0  # Node title bar
-_SOCKET_BASE_HEIGHT = 22.0  # Height per socket row
-
-
 def _estimate_node_height(node: bpy.types.Node) -> float:
     """Estimate node height based on socket count and types.
 
@@ -1205,28 +1016,28 @@ def _estimate_node_height(node: bpy.types.Node) -> float:
     Returns:
         Estimated height in pixels
     """
-    height = _NODE_HEADER_HEIGHT
+    height = NODE_HEADER_HEIGHT
 
     # Count input sockets with their type multipliers
     for socket in node.inputs:
         if socket.enabled:
             # Connected sockets are always 1 row tall (no expanded fields)
             if socket.is_linked:
-                height += _SOCKET_BASE_HEIGHT
+                height += SOCKET_BASE_HEIGHT
             else:
                 # Get socket type - try both .type and bl_idname
                 socket_type = getattr(socket, "type", "") or ""
                 socket_idname = getattr(socket, "bl_idname", "") or ""
 
-                multiplier = _SOCKET_HEIGHT_MULTIPLIERS.get(
-                    socket_type, _SOCKET_HEIGHT_MULTIPLIERS.get(socket_idname, 1.0)
+                multiplier = SOCKET_HEIGHT_MULTIPLIERS.get(
+                    socket_type, SOCKET_HEIGHT_MULTIPLIERS.get(socket_idname, 1.0)
                 )
-                height += _SOCKET_BASE_HEIGHT * multiplier
+                height += SOCKET_BASE_HEIGHT * multiplier
 
     # Count output sockets (usually simpler, no expanded fields)
     for socket in node.outputs:
         if socket.enabled:
-            height += _SOCKET_BASE_HEIGHT
+            height += SOCKET_BASE_HEIGHT
 
     # Add some padding
     height += 10.0
