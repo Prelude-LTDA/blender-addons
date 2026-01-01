@@ -4,7 +4,7 @@ PCB-Style Node Layout System.
 A general-purpose layout algorithm that arranges nodes like an FPGA:
 - Nodes are placed in discrete cells on an X/Y grid
 - Each cell can contain 0-1 nodes plus multiple reroute nodes
-- Connections are routed taxicab-style: first Y, then X
+- Connections are routed taxicab-style: exit right (X+1), then Y, then X to destination
 - Reroutes from the same source are reused when possible
 - Results in clean, readable node graphs with organized routing lanes
 """
@@ -58,20 +58,15 @@ from .types import (
 
 # Re-export public API
 __all__ = [
-    # Constants (from consts.py)
     "NODE_HEADER_HEIGHT",
     "SOCKET_BASE_HEIGHT",
     "SOCKET_HEIGHT_MULTIPLIERS",
-    # Types (from types.py)
     "PendingConnection",
     "SavedFrame",
     "VirtualGrid",
-    # Graph utilities (from graph.py)
     "build_connection_maps",
     "build_link_adjacency",
-    # Routing utilities (from routing.py)
     "build_routing_path",
-    # Grid utilities (from grid.py)
     "build_virtual_grid",
     "calculate_node_row_span",
     "collect_connections",
@@ -80,16 +75,13 @@ __all__ = [
     "compute_node_columns",
     "compute_node_depths",
     "compute_node_input_depths",
-    # Realize utilities (from realize.py)
     "create_reroute_nodes",
     "estimate_node_height",
-    # Main layout function
     "layout_nodes_pcb_style",
     "mark_used_reroutes",
     "optimize_routing_path",
     "realize_connection",
     "realize_layout",
-    # Frame utilities (from frames.py)
     "remove_all_frames",
     "remove_all_reroutes",
     "restore_all_frames",

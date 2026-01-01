@@ -108,7 +108,7 @@ def build_routing_path(conn: PendingConnection) -> list[tuple[int, int]]:
     current_y = from_y
     path.append((current_x, current_y))
 
-    # Y movement first (taxicab: vertical then horizontal)
+    # Then Y movement (vertical), then X movement (horizontal)
     y_step = 1 if to_y > current_y else -1
     while current_y != to_y:
         current_y += y_step

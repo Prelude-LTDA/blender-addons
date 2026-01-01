@@ -273,8 +273,8 @@ def compute_node_input_depths(
 ) -> dict[bpy.types.Node, int]:
     """Compute the depth of each node from input nodes (distance from inputs).
 
-    Input nodes (Group Input, nodes with no incoming connections) have depth 0,
-    nodes they connect to have depth 1, etc.
+    Group Input nodes have depth 0, nodes they connect to have depth 1, etc.
+    Disconnected nodes (not reachable from Group Input) get max_depth + 1.
 
     Args:
         node_tree: The node tree
