@@ -4,7 +4,7 @@ schema_version = "1.0.0"
 id = "uv_map"
 version = "1.0.0"
 name = "UV Map"
-tagline = "3ds Max-style UVW Map modifier for procedural UV mapping"
+tagline = "3ds Max-inspired UV Map modifier and node group for procedural UV mapping"
 maintainer = "Marco Buono <marco@prelude.ltda>"
 
 # Extension type
@@ -16,15 +16,15 @@ type = "add-on"
 # Optional: tag list - see https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
 tags = ["Mesh", "UV"]
 
-# Blender version compatibility - targeting 4.3 and up (for gizmo support)
-blender_version_min = "4.3.0"
+# Blender version compatibility - targeting 5.0 and up
+blender_version_min = "5.0.0"
 # blender_version_max = "6.0.0"
 
 # License conforming to https://spdx.org/licenses/
 license = ["SPDX:GPL-3.0-or-later"]
 
 # Optional: copyright notice
-copyright = ["2025 Marco Buono"]
+copyright = ["2026 Prelude LTDA"]
 
 # Optional: list of supported platforms (omit for all platforms)
 # platforms = ["windows-x64", "macos-arm64", "linux-x64", "windows-arm64", "macos-x64"]

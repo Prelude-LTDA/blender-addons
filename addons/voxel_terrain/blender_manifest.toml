@@ -24,7 +24,7 @@ blender_version_min = "5.0.0"
 license = ["SPDX:GPL-3.0-or-later"]
 
 # Optional: copyright notice
-copyright = ["2025 Marco Buono"]
+copyright = ["2026 Prelude LTDA"]
 
 # Optional: list of supported platforms (omit for all platforms)
 # platforms = ["windows-x64", "macos-arm64", "linux-x64", "windows-arm64", "macos-x64"]
