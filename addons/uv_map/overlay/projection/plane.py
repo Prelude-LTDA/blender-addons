@@ -33,6 +33,8 @@ def generate_plane_vertices(
         # Add next corner for line
         next_corner = corners[(i + 1) % 4]
         transformed_next = transform @ next_corner
-        vertices.append(Vector((transformed_next.x, transformed_next.y, transformed_next.z)))
+        vertices.append(
+            Vector((transformed_next.x, transformed_next.y, transformed_next.z))
+        )
 
     return vertices

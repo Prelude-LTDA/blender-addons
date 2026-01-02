@@ -167,19 +167,24 @@ def _draw_overlay() -> None:  # noqa: PLR0912, PLR0915
     # For rotation, we need to combine object rotation with UV map rotation
     obj_rotation = obj_matrix.to_euler()
     uv_rotation = Euler(rotation, "XYZ")  # type: ignore[arg-type]
-    combined_rotation = Euler((
-        obj_rotation.x + uv_rotation.x,
-        obj_rotation.y + uv_rotation.y,
-        obj_rotation.z + uv_rotation.z,
-    ), "XYZ")
+    combined_rotation = Euler(
+        (
+            obj_rotation.x + uv_rotation.x,
+            obj_rotation.y + uv_rotation.y,
+            obj_rotation.z + uv_rotation.z,
+        ),
+        "XYZ",
+    )
 
     # For size, scale by object scale
     obj_scale = obj_matrix.to_scale()
-    world_size = Vector((
-        size[0] * obj_scale.x,  # type: ignore[index]
-        size[1] * obj_scale.y,  # type: ignore[index]
-        size[2] * obj_scale.z,  # type: ignore[index]
-    ))
+    world_size = Vector(
+        (
+            size[0] * obj_scale.x,  # type: ignore[index]
+            size[1] * obj_scale.y,  # type: ignore[index]
+            size[2] * obj_scale.z,  # type: ignore[index]
+        )
+    )
 
     # Generate vertices based on mapping type
     # Check if normal-based mapping is enabled (for cylindrical, spherical, shrink wrap)
@@ -228,11 +233,7 @@ def _draw_overlay() -> None:  # noqa: PLR0912, PLR0915
 
     # Draw UV direction indicators (yellow lines showing U and V axes)
     # Normal-based overlays use half scale (same as shape wireframe)
-    direction_size = (
-        world_size * 0.5
-        if normal_based
-        else world_size
-    )
+    direction_size = world_size * 0.5 if normal_based else world_size
 
     (
         u_dir_vertices,

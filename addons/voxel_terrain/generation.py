@@ -158,27 +158,35 @@ def calculate_chunks_for_lod(
     for z in range(min_chunk[2], max_chunk[2] + 1):
         for x in range(min_chunk[0], max_chunk[0] + 1):
             for y in range(min_chunk[1], max_chunk[1] + 1):
-                chunk_min = Vector((
-                    x * chunk_size[0],
-                    y * chunk_size[1],
-                    z * chunk_size[2],
-                ))
-                chunk_max = Vector((
-                    (x + 1) * chunk_size[0],
-                    (y + 1) * chunk_size[1],
-                    (z + 1) * chunk_size[2],
-                ))
+                chunk_min = Vector(
+                    (
+                        x * chunk_size[0],
+                        y * chunk_size[1],
+                        z * chunk_size[2],
+                    )
+                )
+                chunk_max = Vector(
+                    (
+                        (x + 1) * chunk_size[0],
+                        (y + 1) * chunk_size[1],
+                        (z + 1) * chunk_size[2],
+                    )
+                )
                 # Skirt extends by skirt_voxels in each direction
-                skirt_min = Vector((
-                    chunk_min[0] - skirt_voxels,
-                    chunk_min[1] - skirt_voxels,
-                    chunk_min[2] - skirt_voxels,
-                ))
-                skirt_max = Vector((
-                    chunk_max[0] + skirt_voxels,
-                    chunk_max[1] + skirt_voxels,
-                    chunk_max[2] + skirt_voxels,
-                ))
+                skirt_min = Vector(
+                    (
+                        chunk_min[0] - skirt_voxels,
+                        chunk_min[1] - skirt_voxels,
+                        chunk_min[2] - skirt_voxels,
+                    )
+                )
+                skirt_max = Vector(
+                    (
+                        chunk_max[0] + skirt_voxels,
+                        chunk_max[1] + skirt_voxels,
+                        chunk_max[2] + skirt_voxels,
+                    )
+                )
 
                 chunks.append(
                     ChunkInfo(

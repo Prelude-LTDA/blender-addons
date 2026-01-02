@@ -63,7 +63,9 @@ def generate_cylinder_vertices(
         # Top point
         point_top = Vector((x, y, 1.0))
         transformed_top = transform @ point_top
-        vertices.append(Vector((transformed_top.x, transformed_top.y, transformed_top.z)))
+        vertices.append(
+            Vector((transformed_top.x, transformed_top.y, transformed_top.z))
+        )
 
     return vertices
 
@@ -127,7 +129,9 @@ def generate_cylinder_capped_vertices(
         # Top point
         point_top = Vector((x, y, 1.0))
         transformed_top = transform @ point_top
-        vertices.append(Vector((transformed_top.x, transformed_top.y, transformed_top.z)))
+        vertices.append(
+            Vector((transformed_top.x, transformed_top.y, transformed_top.z))
+        )
 
     # Add X marks on caps to indicate planar mapping
     # Points are on the unit circle at 45° angles (inscribed in the circle)
