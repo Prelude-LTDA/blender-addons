@@ -1,5 +1,7 @@
 # Prelude LTDA Blender Add-ons
 
+[![CI](https://github.com/Prelude-LTDA/blender-addons/actions/workflows/ci.yml/badge.svg)](https://github.com/Prelude-LTDA/blender-addons/actions/workflows/ci.yml) [![Release](https://github.com/Prelude-LTDA/blender-addons/actions/workflows/release.yml/badge.svg)](https://github.com/Prelude-LTDA/blender-addons/actions/workflows/release.yml)
+
 Monorepo of Blender add-ons, developed internally to streamline the asset production pipeline for our debut game title, [VARG](https://prelude.ltda/games/varg/).
 
 - UV Map

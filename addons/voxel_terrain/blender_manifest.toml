@@ -11,7 +11,7 @@ maintainer = "Marco Buono <marco@prelude.ltda>"
 type = "add-on"
 
 # Optional: link to documentation, support, source files, etc
-# website = "https://github.com/yourusername/voxel-terrain"
+website = "https://github.com/Prelude-LTDA/blender-addons"
 
 # Optional: tag list - see https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
 tags = ["Mesh", "Object"]

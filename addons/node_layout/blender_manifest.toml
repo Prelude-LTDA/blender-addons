@@ -6,6 +6,7 @@ version = "1.0.0"
 name = "Node Layout"
 tagline = "Automatically arrange nodes in a clean PCB-style layout"
 maintainer = "Marco Buono <marco@prelude.ltda>"
+website = "https://github.com/Prelude-LTDA/blender-addons"
 
 # Extension type
 type = "add-on"

@@ -6,6 +6,7 @@ version = "1.0.0"
 name = "UV Map"
 tagline = "3ds Max-inspired UV Map modifier and node group for procedural UV mapping"
 maintainer = "Marco Buono <marco@prelude.ltda>"
+website = "https://github.com/Prelude-LTDA/blender-addons"
 
 # Extension type
 type = "add-on"
