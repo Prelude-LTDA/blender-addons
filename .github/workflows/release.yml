@@ -1,0 +1,67 @@
+name: Release
+
+on:
+  push:
+    tags:
+      # Match semver tags like v1.0.0, v1.0.0-beta, v1.0.0-preview.1, etc.
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+jobs:
+  # Run all checks first by calling the CI workflow
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  build-and-release:
+    name: Build and Release
+    needs: [ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Blender
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget xz-utils libxi6 libxxf86vm1 libxfixes3 libxrender1 libgl1
+
+          # Download Blender 5.0
+          BLENDER_VERSION="5.0.0"
+          BLENDER_MAJOR_MINOR="${BLENDER_VERSION%.*}"
+          BLENDER_URL="https://download.blender.org/release/Blender${BLENDER_MAJOR_MINOR}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+
+          wget -q "${BLENDER_URL}" -O blender.tar.xz
+          tar -xf blender.tar.xz
+
+          # Add to PATH
+          echo "${PWD}/blender-${BLENDER_VERSION}-linux-x64" >> $GITHUB_PATH
+
+      - name: Build addons
+        run: python scripts/build.py
+
+      - name: Determine release type
+        id: release_type
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" == *"-"* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "Release type: prerelease"
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "Release type: stable"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          prerelease: ${{ steps.release_type.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
