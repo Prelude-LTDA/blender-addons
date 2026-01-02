@@ -8,23 +8,19 @@ from mathutils import Euler, Matrix, Vector
 
 
 def generate_cylinder_vertices(
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     segments: int = 32,
-) -> list[tuple[float, float, float]]:
+) -> list[Vector]:
     """Generate vertices for a cylinder wireframe."""
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    scale_vec = Vector(size)
-
     # Build full TRS matrix
-    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    scale_matrix = Matrix.Diagonal(size.to_4d())
     transform = (
-        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+        Matrix.Translation(position) @ rotation.to_matrix().to_4x4() @ scale_matrix
     )
 
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
 
     # Generate circle at bottom (z = -1.0)
     for i in range(segments):
@@ -37,7 +33,7 @@ def generate_cylinder_vertices(
         for x, y in [(x1, y1), (x2, y2)]:
             point = Vector((x, y, -1.0))
             transformed = transform @ point
-            vertices.append((transformed.x, transformed.y, transformed.z))
+            vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate circle at top (z = 1.0)
     for i in range(segments):
@@ -50,7 +46,7 @@ def generate_cylinder_vertices(
         for x, y in [(x1, y1), (x2, y2)]:
             point = Vector((x, y, 1.0))
             transformed = transform @ point
-            vertices.append((transformed.x, transformed.y, transformed.z))
+            vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate vertical lines (4 evenly spaced)
     for i in range(4):
@@ -61,38 +57,34 @@ def generate_cylinder_vertices(
         point_bottom = Vector((x, y, -1.0))
         transformed_bottom = transform @ point_bottom
         vertices.append(
-            (transformed_bottom.x, transformed_bottom.y, transformed_bottom.z)
+            Vector((transformed_bottom.x, transformed_bottom.y, transformed_bottom.z))
         )
 
         # Top point
         point_top = Vector((x, y, 1.0))
         transformed_top = transform @ point_top
-        vertices.append((transformed_top.x, transformed_top.y, transformed_top.z))
+        vertices.append(Vector((transformed_top.x, transformed_top.y, transformed_top.z)))
 
     return vertices
 
 
 def generate_cylinder_capped_vertices(
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     segments: int = 32,
-) -> list[tuple[float, float, float]]:
+) -> list[Vector]:
     """Generate vertices for a capped cylinder wireframe.
 
     Same as cylinder but with X marks on the top and bottom caps.
     """
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    scale_vec = Vector(size)
-
     # Build full TRS matrix
-    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    scale_matrix = Matrix.Diagonal(size.to_4d())
     transform = (
-        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+        Matrix.Translation(position) @ rotation.to_matrix().to_4x4() @ scale_matrix
     )
 
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
 
     # Generate circle at bottom (z = -1.0)
     for i in range(segments):
@@ -105,7 +97,7 @@ def generate_cylinder_capped_vertices(
         for x, y in [(x1, y1), (x2, y2)]:
             point = Vector((x, y, -1.0))
             transformed = transform @ point
-            vertices.append((transformed.x, transformed.y, transformed.z))
+            vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate circle at top (z = 1.0)
     for i in range(segments):
@@ -118,7 +110,7 @@ def generate_cylinder_capped_vertices(
         for x, y in [(x1, y1), (x2, y2)]:
             point = Vector((x, y, 1.0))
             transformed = transform @ point
-            vertices.append((transformed.x, transformed.y, transformed.z))
+            vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate vertical lines (4 evenly spaced)
     for i in range(4):
@@ -129,13 +121,13 @@ def generate_cylinder_capped_vertices(
         point_bottom = Vector((x, y, -1.0))
         transformed_bottom = transform @ point_bottom
         vertices.append(
-            (transformed_bottom.x, transformed_bottom.y, transformed_bottom.z)
+            Vector((transformed_bottom.x, transformed_bottom.y, transformed_bottom.z))
         )
 
         # Top point
         point_top = Vector((x, y, 1.0))
         transformed_top = transform @ point_top
-        vertices.append((transformed_top.x, transformed_top.y, transformed_top.z))
+        vertices.append(Vector((transformed_top.x, transformed_top.y, transformed_top.z)))
 
     # Add X marks on caps to indicate planar mapping
     # Points are on the unit circle at 45° angles (inscribed in the circle)
@@ -150,8 +142,8 @@ def generate_cylinder_capped_vertices(
         point2 = Vector((p2[0], p2[1], -1.0))
         t1 = transform @ point1
         t2 = transform @ point2
-        vertices.append((t1.x, t1.y, t1.z))
-        vertices.append((t2.x, t2.y, t2.z))
+        vertices.append(Vector((t1.x, t1.y, t1.z)))
+        vertices.append(Vector((t2.x, t2.y, t2.z)))
 
     # Top cap X (inscribed in circle) - solid lines
     for p1, p2 in [
@@ -162,34 +154,32 @@ def generate_cylinder_capped_vertices(
         point2 = Vector((p2[0], p2[1], 1.0))
         t1 = transform @ point1
         t2 = transform @ point2
-        vertices.append((t1.x, t1.y, t1.z))
-        vertices.append((t2.x, t2.y, t2.z))
+        vertices.append(Vector((t1.x, t1.y, t1.z)))
+        vertices.append(Vector((t2.x, t2.y, t2.z)))
 
     return vertices
 
 
 def generate_cylinder_normal_vertices(
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     segments: int = 64,
-) -> list[tuple[float, float, float]]:
+) -> list[Vector]:
     """Generate vertices for a normal-based cylinder wireframe indicator.
 
     Shows rotation and scale orientation. Position is typically set to object origin
     since normal-based mapping doesn't depend on projection position.
     Dashed circles indicate that this represents normal direction, not position.
     """
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    transform = Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4()
+    transform = Matrix.Translation(position) @ rotation.to_matrix().to_4x4()
 
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
 
     # Use size to scale the cylinder (affects normal transformation)
-    radius_x = size[0] * 0.5
-    radius_y = size[1] * 0.5
-    height = size[2] * 0.5
+    radius_x = size.x * 0.5
+    radius_y = size.y * 0.5
+    height = size.z * 0.5
 
     # Generate ellipse at bottom (z = -height) with dashed pattern (every other segment)
     for i in range(0, segments, 2):
@@ -202,7 +192,7 @@ def generate_cylinder_normal_vertices(
         for x, y in [(x1, y1), (x2, y2)]:
             point = Vector((x, y, -height))
             transformed = transform @ point
-            vertices.append((transformed.x, transformed.y, transformed.z))
+            vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate ellipse at top (z = height) with dashed pattern
     for i in range(0, segments, 2):
@@ -215,7 +205,7 @@ def generate_cylinder_normal_vertices(
         for x, y in [(x1, y1), (x2, y2)]:
             point = Vector((x, y, height))
             transformed = transform @ point
-            vertices.append((transformed.x, transformed.y, transformed.z))
+            vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate vertical lines (4 evenly spaced, dashed with subdivisions)
     num_v_segments = 16  # Number of segments for vertical lines
@@ -232,8 +222,8 @@ def generate_cylinder_normal_vertices(
             point2 = Vector((x, y, z2))
             t1 = transform @ point1
             t2 = transform @ point2
-            vertices.append((t1.x, t1.y, t1.z))
-            vertices.append((t2.x, t2.y, t2.z))
+            vertices.append(Vector((t1.x, t1.y, t1.z)))
+            vertices.append(Vector((t2.x, t2.y, t2.z)))
 
     # Add axis indicator arrow pointing along Z (shows the cylinder's main axis)
     # Arrow shaft - scale with height but cap the arrow size for visibility
@@ -242,8 +232,8 @@ def generate_cylinder_normal_vertices(
     shaft_end = Vector((0.0, 0.0, height * 1.5))
     t_start = transform @ shaft_start
     t_end = transform @ shaft_end
-    vertices.append((t_start.x, t_start.y, t_start.z))
-    vertices.append((t_end.x, t_end.y, t_end.z))
+    vertices.append(Vector((t_start.x, t_start.y, t_start.z)))
+    vertices.append(Vector((t_end.x, t_end.y, t_end.z)))
 
     # Arrowhead - scale with average radius
     arrow_size = min(0.15, avg_radius * 0.3)
@@ -255,18 +245,18 @@ def generate_cylinder_normal_vertices(
     ]:
         arrow_base = Vector((offset[0], offset[1], height * 1.5 - arrow_size))
         t_base = transform @ arrow_base
-        vertices.append((t_end.x, t_end.y, t_end.z))
-        vertices.append((t_base.x, t_base.y, t_base.z))
+        vertices.append(Vector((t_end.x, t_end.y, t_end.z)))
+        vertices.append(Vector((t_base.x, t_base.y, t_base.z)))
 
     return vertices
 
 
 def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     segments: int = 64,
-) -> list[tuple[float, float, float]]:
+) -> list[Vector]:
     """Generate vertices for a capped normal-based cylinder wireframe indicator.
 
     Same as cylinder normal but with X marks on the top and bottom caps
@@ -274,16 +264,14 @@ def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
     Position is typically set to object origin since normal-based mapping
     doesn't depend on projection position.
     """
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    transform = Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4()
+    transform = Matrix.Translation(position) @ rotation.to_matrix().to_4x4()
 
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
 
     # Use size to scale the cylinder (affects normal transformation)
-    radius_x = size[0] * 0.5
-    radius_y = size[1] * 0.5
-    height = size[2] * 0.5
+    radius_x = size.x * 0.5
+    radius_y = size.y * 0.5
+    height = size.z * 0.5
 
     # Generate ellipse at bottom (z = -height) with dashed pattern (every other segment)
     for i in range(0, segments, 2):
@@ -296,7 +284,7 @@ def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
         for x, y in [(x1, y1), (x2, y2)]:
             point = Vector((x, y, -height))
             transformed = transform @ point
-            vertices.append((transformed.x, transformed.y, transformed.z))
+            vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate ellipse at top (z = height) with dashed pattern
     for i in range(0, segments, 2):
@@ -309,7 +297,7 @@ def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
         for x, y in [(x1, y1), (x2, y2)]:
             point = Vector((x, y, height))
             transformed = transform @ point
-            vertices.append((transformed.x, transformed.y, transformed.z))
+            vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate vertical lines (4 evenly spaced, dashed with subdivisions)
     num_v_segments = 16  # Number of segments for vertical lines
@@ -326,8 +314,8 @@ def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
             point2 = Vector((x, y, z2))
             t1 = transform @ point1
             t2 = transform @ point2
-            vertices.append((t1.x, t1.y, t1.z))
-            vertices.append((t2.x, t2.y, t2.z))
+            vertices.append(Vector((t1.x, t1.y, t1.z)))
+            vertices.append(Vector((t2.x, t2.y, t2.z)))
 
     # Add axis indicator arrow pointing along Z (shows the cylinder's main axis)
     avg_radius = (radius_x + radius_y) * 0.5
@@ -335,8 +323,8 @@ def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
     shaft_end = Vector((0.0, 0.0, height * 1.5))
     t_start = transform @ shaft_start
     t_end = transform @ shaft_end
-    vertices.append((t_start.x, t_start.y, t_start.z))
-    vertices.append((t_end.x, t_end.y, t_end.z))
+    vertices.append(Vector((t_start.x, t_start.y, t_start.z)))
+    vertices.append(Vector((t_end.x, t_end.y, t_end.z)))
 
     # Arrowhead - scale with average radius
     arrow_size = min(0.15, avg_radius * 0.3)
@@ -348,8 +336,8 @@ def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
     ]:
         arrow_base = Vector((offset[0], offset[1], height * 1.5 - arrow_size))
         t_base = transform @ arrow_base
-        vertices.append((t_end.x, t_end.y, t_end.z))
-        vertices.append((t_base.x, t_base.y, t_base.z))
+        vertices.append(Vector((t_end.x, t_end.y, t_end.z)))
+        vertices.append(Vector((t_base.x, t_base.y, t_base.z)))
 
     # Add X marks on caps to indicate planar normal-based mapping
     # Scale the X marks to fit within the ellipse
@@ -381,8 +369,8 @@ def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
             point2 = Vector((x2, y2, -height))
             t1 = transform @ point1
             t2 = transform @ point2
-            vertices.append((t1.x, t1.y, t1.z))
-            vertices.append((t2.x, t2.y, t2.z))
+            vertices.append(Vector((t1.x, t1.y, t1.z)))
+            vertices.append(Vector((t2.x, t2.y, t2.z)))
 
     # Top cap X (inscribed in ellipse) - dashed
     for p1, p2 in [
@@ -407,7 +395,7 @@ def generate_cylinder_capped_normal_vertices(  # noqa: PLR0915
             point2 = Vector((x2, y2, height))
             t1 = transform @ point1
             t2 = transform @ point2
-            vertices.append((t1.x, t1.y, t1.z))
-            vertices.append((t2.x, t2.y, t2.z))
+            vertices.append(Vector((t1.x, t1.y, t1.z)))
+            vertices.append(Vector((t2.x, t2.y, t2.z)))
 
     return vertices

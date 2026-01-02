@@ -8,12 +8,12 @@ from mathutils import Euler, Matrix, Vector
 
 
 def generate_shrink_wrap_vertices(  # noqa: PLR0915
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     grid_lines: int = 4,
     segments_per_line: int = 32,
-) -> list[tuple[float, float, float]]:
+) -> list[Vector]:
     """Generate vertices for shrink wrap (azimuthal equidistant) wireframe.
 
     Shows a UV grid projected onto the sphere using the inverse azimuthal
@@ -32,17 +32,13 @@ def generate_shrink_wrap_vertices(  # noqa: PLR0915
 
     Lines are extended beyond [0,1] UV range to reach r=1 (the -Z pole).
     """
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    scale_vec = Vector(size)
-
     # Build full TRS matrix
-    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    scale_matrix = Matrix.Diagonal(size.to_4d())
     transform = (
-        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+        Matrix.Translation(position) @ rotation.to_matrix().to_4x4() @ scale_matrix
     )
 
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
 
     def uv_to_sphere(u: float, v: float) -> Vector:
         """Inverse azimuthal equidistant projection from UV to sphere."""
@@ -98,8 +94,8 @@ def generate_shrink_wrap_vertices(  # noqa: PLR0915
             t1_vec = transform @ p1
             t2_vec = transform @ p2
 
-            vertices.append((t1_vec.x, t1_vec.y, t1_vec.z))
-            vertices.append((t2_vec.x, t2_vec.y, t2_vec.z))
+            vertices.append(Vector((t1_vec.x, t1_vec.y, t1_vec.z)))
+            vertices.append(Vector((t2_vec.x, t2_vec.y, t2_vec.z)))
 
     # Generate horizontal lines (constant V) in UV space
     # Extend u range to reach r=1 (bottom pole)
@@ -129,19 +125,19 @@ def generate_shrink_wrap_vertices(  # noqa: PLR0915
             t1_vec = transform @ p1
             t2_vec = transform @ p2
 
-            vertices.append((t1_vec.x, t1_vec.y, t1_vec.z))
-            vertices.append((t2_vec.x, t2_vec.y, t2_vec.z))
+            vertices.append(Vector((t1_vec.x, t1_vec.y, t1_vec.z)))
+            vertices.append(Vector((t2_vec.x, t2_vec.y, t2_vec.z)))
 
     return vertices
 
 
 def generate_shrink_wrap_normal_vertices(  # noqa: PLR0915
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     grid_lines: int = 4,
     segments_per_line: int = 64,
-) -> list[tuple[float, float, float]]:
+) -> list[Vector]:
     """Generate vertices for shrink wrap (azimuthal) normal-based wireframe indicator.
 
     Shows rotation and scale orientation. Position is typically set to object origin
@@ -150,17 +146,13 @@ def generate_shrink_wrap_normal_vertices(  # noqa: PLR0915
 
     Uses inverse azimuthal equidistant projection but with dashed pattern.
     """
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-
     # Scale affects normal transformation - use as ellipsoid radii
-    scale_vec = Vector(size)
-    scale_matrix = Matrix.Diagonal((scale_vec * 0.5).to_4d())
+    scale_matrix = Matrix.Diagonal((size * 0.5).to_4d())
     transform = (
-        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+        Matrix.Translation(position) @ rotation.to_matrix().to_4x4() @ scale_matrix
     )
 
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
 
     def uv_to_sphere(u: float, v: float) -> Vector:
         """Inverse azimuthal equidistant projection from UV to sphere."""
@@ -213,8 +205,8 @@ def generate_shrink_wrap_normal_vertices(  # noqa: PLR0915
             t1_vec = transform @ p1
             t2_vec = transform @ p2
 
-            vertices.append((t1_vec.x, t1_vec.y, t1_vec.z))
-            vertices.append((t2_vec.x, t2_vec.y, t2_vec.z))
+            vertices.append(Vector((t1_vec.x, t1_vec.y, t1_vec.z)))
+            vertices.append(Vector((t2_vec.x, t2_vec.y, t2_vec.z)))
 
     # Generate horizontal lines (constant V) in UV space - dashed pattern
     for j in range(grid_lines + 1):
@@ -241,18 +233,18 @@ def generate_shrink_wrap_normal_vertices(  # noqa: PLR0915
             t1_vec = transform @ p1
             t2_vec = transform @ p2
 
-            vertices.append((t1_vec.x, t1_vec.y, t1_vec.z))
-            vertices.append((t2_vec.x, t2_vec.y, t2_vec.z))
+            vertices.append(Vector((t1_vec.x, t1_vec.y, t1_vec.z)))
+            vertices.append(Vector((t2_vec.x, t2_vec.y, t2_vec.z)))
 
     # Add axis indicator arrow showing +Z orientation (center of projection)
-    avg_radius = sum(size) / 6.0  # Average of half-sizes
+    avg_radius = (size.x + size.y + size.z) / 6.0  # Average of half-sizes
     shaft_start = Vector((0.0, 0.0, 0.0))
-    shaft_end = Vector((0.0, 0.0, size[2] * 0.75))
-    rot_mat = rot_euler.to_matrix().to_4x4()
+    shaft_end = Vector((0.0, 0.0, size.z * 0.75))
+    rot_mat = rotation.to_matrix().to_4x4()
     t_start = rot_mat @ shaft_start
     t_end = rot_mat @ shaft_end
-    vertices.append((t_start.x, t_start.y, t_start.z))
-    vertices.append((t_end.x, t_end.y, t_end.z))
+    vertices.append(Vector((t_start.x, t_start.y, t_start.z)))
+    vertices.append(Vector((t_end.x, t_end.y, t_end.z)))
 
     # Arrowhead for Z
     arrow_size = min(0.1, avg_radius * 0.2)
@@ -262,9 +254,9 @@ def generate_shrink_wrap_normal_vertices(  # noqa: PLR0915
         (0, arrow_size),
         (0, -arrow_size),
     ]:
-        arrow_base = Vector((offset[0], offset[1], size[2] * 0.75 - arrow_size))
+        arrow_base = Vector((offset[0], offset[1], size.z * 0.75 - arrow_size))
         t_base = rot_mat @ arrow_base
-        vertices.append((t_end.x, t_end.y, t_end.z))
-        vertices.append((t_base.x, t_base.y, t_base.z))
+        vertices.append(Vector((t_end.x, t_end.y, t_end.z)))
+        vertices.append(Vector((t_base.x, t_base.y, t_base.z)))
 
     return vertices

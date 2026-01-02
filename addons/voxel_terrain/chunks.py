@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import bpy
 import gpu
@@ -19,7 +19,13 @@ from gpu_extras.batch import batch_for_shader
 from mathutils import Vector
 
 if TYPE_CHECKING:
+    from typing import TypeAlias
+
     from bpy.types import Scene
+
+    # Type alias for GPU batch vertex data - the stubs don't recognize list[Vector]
+    # but it's valid at runtime since Vector is a Sequence[float]
+    GPUVertexData: TypeAlias = dict[str, Any]
 
 from .typing_utils import get_object_props, get_scene_props
 
@@ -30,20 +36,20 @@ _draw_handler: object | None = None
 # Contains: (chunk_min, chunk_max, skirt_min, skirt_max)
 _current_processing_chunk: (
     tuple[
-        tuple[float, float, float],  # chunk min bounds
-        tuple[float, float, float],  # chunk max bounds
-        tuple[float, float, float],  # skirt min bounds
-        tuple[float, float, float],  # skirt max bounds
+        Vector,  # chunk min bounds
+        Vector,  # chunk max bounds
+        Vector,  # skirt min bounds
+        Vector,  # skirt max bounds
     ]
     | None
 ) = None
 
 
 def set_current_processing_chunk(
-    chunk_min: tuple[float, float, float],
-    chunk_max: tuple[float, float, float],
-    skirt_min: tuple[float, float, float],
-    skirt_max: tuple[float, float, float],
+    chunk_min: Vector,
+    chunk_max: Vector,
+    skirt_min: Vector,
+    skirt_max: Vector,
 ) -> None:
     """Set the current chunk being processed (for overlay visualization)."""
     global _current_processing_chunk  # noqa: PLW0603
@@ -83,8 +89,8 @@ class ChunkBounds:
 class WorldBounds:
     """Represents min/max world coordinates for arbitrary bounds."""
 
-    min_pos: tuple[float, float, float]
-    max_pos: tuple[float, float, float]
+    min_pos: Vector
+    max_pos: Vector
 
 
 def get_terrain_objects(scene: Scene) -> list[bpy.types.Object]:
@@ -197,21 +203,21 @@ def get_selection_world_bounds(context: bpy.types.Context) -> WorldBounds | None
 
     min_corner, max_corner = world_bounds
     return WorldBounds(
-        min_pos=(min_corner.x, min_corner.y, min_corner.z),
-        max_pos=(max_corner.x, max_corner.y, max_corner.z),
+        min_pos=min_corner,
+        max_pos=max_corner,
     )
 
 
 def generate_chunk_wireframe_vertices(
     chunk_bounds: ChunkBounds,
     chunk_size: tuple[float, float, float],
-) -> tuple[list[tuple[float, float, float]], list[tuple[int, int]]]:
+) -> tuple[list[Vector], list[tuple[int, int]]]:
     """
     Generate vertices and edges for chunk wireframe visualization.
 
     Returns (vertices, edges) for use with GPU shader.
     """
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
     edges: list[tuple[int, int]] = []
 
     min_c = chunk_bounds.min_chunk
@@ -224,7 +230,7 @@ def generate_chunk_wireframe_vertices(
                 x = cx * chunk_size[0]
                 y = cy * chunk_size[1]
                 z = cz * chunk_size[2]
-                vertices.append((x, y, z))
+                vertices.append(Vector((x, y, z)))
 
     # Generate edges along each axis
     count = chunk_bounds.chunk_count
@@ -260,7 +266,7 @@ def generate_skirt_wireframe_vertices(
     voxel_size: float,
     skirt_voxels: int,
     corner_fraction: float = 0.15,
-) -> tuple[list[tuple[float, float, float]], list[tuple[int, int]]]:
+) -> tuple[list[Vector], list[tuple[int, int]]]:
     """
     Generate vertices and edges for skirt wireframe visualization.
 
@@ -272,7 +278,7 @@ def generate_skirt_wireframe_vertices(
 
     Returns (vertices, edges) for use with GPU shader.
     """
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
     edges: list[tuple[int, int]] = []
 
     min_c = chunk_bounds.min_chunk
@@ -291,8 +297,8 @@ def generate_skirt_wireframe_vertices(
     ) -> None:
         """Add an edge."""
         i = len(vertices)
-        vertices.append(p1)
-        vertices.append(p2)
+        vertices.append(Vector(p1))
+        vertices.append(Vector(p2))
         edges.append((i, i + 1))
 
     # Draw skirt corners for each chunk (outset from chunk boundaries)
@@ -463,7 +469,9 @@ def _draw_chunk_wireframes(
     if vertices and edges:
         # Teal color (R, G, B, A)
         color = (0.0, 0.8, 0.8, 0.8)
-        batch = batch_for_shader(shader, "LINES", {"pos": vertices}, indices=edges)
+        batch = batch_for_shader(
+            shader, "LINES", cast("GPUVertexData", {"pos": vertices}), indices=edges
+        )
         shader.uniform_float("color", color)
         batch.draw(shader)
 
@@ -480,7 +488,10 @@ def _draw_chunk_wireframes(
         if skirt_vertices and skirt_edges:
             skirt_color = (0.0, 0.6, 0.6, 0.6)
             skirt_batch = batch_for_shader(
-                shader, "LINES", {"pos": skirt_vertices}, indices=skirt_edges
+                shader,
+                "LINES",
+                cast("GPUVertexData", {"pos": skirt_vertices}),
+                indices=skirt_edges,
             )
             shader.uniform_float("color", skirt_color)
             skirt_batch.draw(shader)

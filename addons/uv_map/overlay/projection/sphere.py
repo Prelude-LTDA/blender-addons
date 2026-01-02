@@ -8,13 +8,13 @@ from mathutils import Euler, Matrix, Vector
 
 
 def generate_sphere_vertices(
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     segments: int = 32,
     drawn_rings: int = 4,
     smooth_rings: int = 32,
-) -> list[tuple[float, float, float]]:
+) -> list[Vector]:
     """Generate vertices for a sphere wireframe.
 
     Args:
@@ -22,17 +22,13 @@ def generate_sphere_vertices(
         drawn_rings: Number of latitude circles to actually draw
         smooth_rings: Number of steps for longitude lines (higher = smoother)
     """
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    scale_vec = Vector(size)
-
     # Build full TRS matrix
-    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    scale_matrix = Matrix.Diagonal(size.to_4d())
     transform = (
-        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+        Matrix.Translation(position) @ rotation.to_matrix().to_4x4() @ scale_matrix
     )
 
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
 
     # Generate latitude circles (only every Nth ring, based on ratio)
     ring_step = max(1, smooth_rings // drawn_rings)
@@ -51,7 +47,7 @@ def generate_sphere_vertices(
             for x, y in [(x1, y1), (x2, y2)]:
                 point = Vector((x, y, z))
                 transformed = transform @ point
-                vertices.append((transformed.x, transformed.y, transformed.z))
+                vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate longitude lines (4 evenly spaced) with smooth_rings steps
     for i in range(4):
@@ -68,35 +64,33 @@ def generate_sphere_vertices(
 
                 point = Vector((x, y, z))
                 transformed = transform @ point
-                vertices.append((transformed.x, transformed.y, transformed.z))
+                vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     return vertices
 
 
 def generate_sphere_normal_vertices(
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     segments: int = 64,
     drawn_rings: int = 4,
     smooth_rings: int = 32,
-) -> list[tuple[float, float, float]]:
+) -> list[Vector]:
     """Generate vertices for a normal-based sphere/ellipsoid wireframe indicator.
 
     Shows rotation and scale orientation. Position is typically set to object origin
     since normal-based mapping doesn't depend on projection position.
     Dashed latitude lines indicate that this represents normal direction, not position.
     """
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    transform = Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4()
+    transform = Matrix.Translation(position) @ rotation.to_matrix().to_4x4()
 
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
 
     # Use size to scale the ellipsoid (affects normal transformation)
-    radius_x = size[0] * 0.5
-    radius_y = size[1] * 0.5
-    radius_z = size[2] * 0.5
+    radius_x = size.x * 0.5
+    radius_y = size.y * 0.5
+    radius_z = size.z * 0.5
 
     # Generate latitude circles (dashed - every other segment)
     ring_step = max(1, smooth_rings // drawn_rings)
@@ -118,7 +112,7 @@ def generate_sphere_normal_vertices(
             for x, y in [(x1, y1), (x2, y2)]:
                 point = Vector((x, y, z))
                 transformed = transform @ point
-                vertices.append((transformed.x, transformed.y, transformed.z))
+                vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     # Generate longitude lines (4 evenly spaced, dashed)
     for i in range(4):
@@ -141,8 +135,8 @@ def generate_sphere_normal_vertices(
             point2 = Vector((x2, y2, z2))
             t1 = transform @ point1
             t2 = transform @ point2
-            vertices.append((t1.x, t1.y, t1.z))
-            vertices.append((t2.x, t2.y, t2.z))
+            vertices.append(Vector((t1.x, t1.y, t1.z)))
+            vertices.append(Vector((t2.x, t2.y, t2.z)))
 
     # Add axis indicator arrows showing orientation
     # Z axis (primary) - scale with radius_z
@@ -151,8 +145,8 @@ def generate_sphere_normal_vertices(
     shaft_end = Vector((0.0, 0.0, radius_z * 1.5))
     t_start = transform @ shaft_start
     t_end = transform @ shaft_end
-    vertices.append((t_start.x, t_start.y, t_start.z))
-    vertices.append((t_end.x, t_end.y, t_end.z))
+    vertices.append(Vector((t_start.x, t_start.y, t_start.z)))
+    vertices.append(Vector((t_end.x, t_end.y, t_end.z)))
 
     # Arrowhead for Z - scale with average radius
     arrow_size = min(0.1, avg_radius * 0.2)
@@ -164,7 +158,7 @@ def generate_sphere_normal_vertices(
     ]:
         arrow_base = Vector((offset[0], offset[1], radius_z * 1.5 - arrow_size))
         t_base = transform @ arrow_base
-        vertices.append((t_end.x, t_end.y, t_end.z))
-        vertices.append((t_base.x, t_base.y, t_base.z))
+        vertices.append(Vector((t_end.x, t_end.y, t_end.z)))
+        vertices.append(Vector((t_base.x, t_base.y, t_base.z)))
 
     return vertices

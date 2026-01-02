@@ -13,6 +13,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 import bpy
+from mathutils import Vector
 
 from .chunks import calculate_chunk_bounds
 from .shared.node_layout import layout_nodes_pcb_style
@@ -36,11 +37,11 @@ class ChunkInfo:
 
     lod_level: int
     chunk_index: tuple[int, int, int]
-    chunk_min: tuple[float, float, float]
-    chunk_max: tuple[float, float, float]
+    chunk_min: Vector
+    chunk_max: Vector
     voxel_size: float
-    skirt_min: tuple[float, float, float]
-    skirt_max: tuple[float, float, float]
+    skirt_min: Vector
+    skirt_max: Vector
 
 
 @dataclass
@@ -157,27 +158,27 @@ def calculate_chunks_for_lod(
     for z in range(min_chunk[2], max_chunk[2] + 1):
         for x in range(min_chunk[0], max_chunk[0] + 1):
             for y in range(min_chunk[1], max_chunk[1] + 1):
-                chunk_min = (
+                chunk_min = Vector((
                     x * chunk_size[0],
                     y * chunk_size[1],
                     z * chunk_size[2],
-                )
-                chunk_max = (
+                ))
+                chunk_max = Vector((
                     (x + 1) * chunk_size[0],
                     (y + 1) * chunk_size[1],
                     (z + 1) * chunk_size[2],
-                )
+                ))
                 # Skirt extends by skirt_voxels in each direction
-                skirt_min = (
+                skirt_min = Vector((
                     chunk_min[0] - skirt_voxels,
                     chunk_min[1] - skirt_voxels,
                     chunk_min[2] - skirt_voxels,
-                )
-                skirt_max = (
+                ))
+                skirt_max = Vector((
                     chunk_max[0] + skirt_voxels,
                     chunk_max[1] + skirt_voxels,
                     chunk_max[2] + skirt_voxels,
-                )
+                ))
 
                 chunks.append(
                     ChunkInfo(

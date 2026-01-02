@@ -19,12 +19,12 @@ def generate_cylindrical_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Generate cylindrical UV direction indicators."""
     # U line (around circumference)
@@ -119,12 +119,12 @@ def _add_cap_direction(
     v_flip: bool,
     transform: Matrix,
     cap_z: float,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Add cap direction indicators (for capped cylinder)."""
     cap_offset = Matrix.Translation(Vector((0, 0, cap_z)))
@@ -160,12 +160,12 @@ def generate_cylindrical_capped_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Generate cylindrical capped UV direction indicators."""
     # Generate the base cylindrical directions
@@ -218,12 +218,12 @@ def generate_cylindrical_normal_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Generate cylindrical normal-based UV direction indicators."""
     # Same as regular cylindrical
@@ -314,12 +314,12 @@ def generate_cylindrical_normal_capped_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Generate cylindrical normal-based capped UV direction indicators."""
     # Generate the base cylindrical normal directions

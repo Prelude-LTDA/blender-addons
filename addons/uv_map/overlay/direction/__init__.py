@@ -63,12 +63,12 @@ if TYPE_CHECKING:
             bool,  # u_flip
             bool,  # v_flip
             Matrix,  # transform
-            list[tuple[float, float, float]],  # u_vertices
-            list[tuple[float, float, float]],  # v_vertices
-            list[tuple[float, float, float]],  # u_proj_vertices
-            list[tuple[float, float, float]],  # v_proj_vertices
-            list[tuple[float, float, float]],  # u_labels
-            list[tuple[float, float, float]],  # v_labels
+            list[Vector],  # u_vertices
+            list[Vector],  # v_vertices
+            list[Vector],  # u_proj_vertices
+            list[Vector],  # v_proj_vertices
+            list[Vector],  # u_labels
+            list[Vector],  # v_labels
         ],
         None,
     ]
@@ -90,9 +90,9 @@ _DIRECTION_GENERATORS: dict[str, DirectionGenerator] = {
 
 def generate_uv_direction_vertices(
     mapping_type: str,
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     u_tile: float,
     v_tile: float,
     u_offset: float,
@@ -101,12 +101,12 @@ def generate_uv_direction_vertices(
     u_flip: bool,
     v_flip: bool,
 ) -> tuple[
-    list[tuple[float, float, float]],
-    list[tuple[float, float, float]],
-    list[tuple[float, float, float]],
-    list[tuple[float, float, float]],
-    list[tuple[float, float, float]],
-    list[tuple[float, float, float]],
+    list[Vector],
+    list[Vector],
+    list[Vector],
+    list[Vector],
+    list[Vector],
+    list[Vector],
 ]:
     """Generate UV direction indicator vertices for a given mapping type.
 
@@ -122,26 +122,22 @@ def generate_uv_direction_vertices(
     For cylindrical capped: returns lines for side + top/bottom caps
     For box: returns lines for each face projection
     """
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    scale_vec = Vector(size)
-
     # Build TRS transform matrix
-    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    scale_matrix = Matrix.Diagonal(size.to_4d())
     transform = (
-        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+        Matrix.Translation(position) @ rotation.to_matrix().to_4x4() @ scale_matrix
     )
 
     # Adaptive segments based on tiling (more segments for longer lines)
     base_segments = 16
     segments = compute_adaptive_segments(u_tile, v_tile, base_segments)
 
-    u_vertices: list[tuple[float, float, float]] = []
-    v_vertices: list[tuple[float, float, float]] = []
-    u_proj_vertices: list[tuple[float, float, float]] = []
-    v_proj_vertices: list[tuple[float, float, float]] = []
-    u_labels: list[tuple[float, float, float]] = []
-    v_labels: list[tuple[float, float, float]] = []
+    u_vertices: list[Vector] = []
+    v_vertices: list[Vector] = []
+    u_proj_vertices: list[Vector] = []
+    v_proj_vertices: list[Vector] = []
+    u_labels: list[Vector] = []
+    v_labels: list[Vector] = []
 
     # Look up and call the appropriate generator function
     generator = _DIRECTION_GENERATORS.get(mapping_type)

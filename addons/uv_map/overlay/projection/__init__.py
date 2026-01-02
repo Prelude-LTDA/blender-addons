@@ -44,14 +44,16 @@ from .sphere import generate_sphere_normal_vertices, generate_sphere_vertices
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from mathutils import Euler, Vector
+
     # All projection generators have uniform signature: (position, rotation, size) -> vertices
     ProjectionGenerator = Callable[
         [
-            tuple[float, float, float],
-            tuple[float, float, float],
-            tuple[float, float, float],
+            Vector,
+            Euler,
+            Vector,
         ],
-        list[tuple[float, float, float]],
+        list[Vector],
     ]
 
 # Mapping type transformations based on normal_based and cap flags
@@ -97,25 +99,25 @@ def _get_effective_mapping_type(
 
 def generate_projection_vertices(
     mapping_type: str,
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
     normal_based: bool = False,
     cap: bool = False,
-) -> tuple[str, list[tuple[float, float, float]]]:
+) -> tuple[str, list[Vector]]:
     """Generate projection wireframe vertices for a given mapping type.
 
     Args:
         mapping_type: Base mapping type (MAPPING_PLANAR, MAPPING_CYLINDRICAL, etc.)
         position: World position of the projection
-        rotation: Rotation as (x, y, z) Euler angles
-        size: Scale as (x, y, z)
+        rotation: Rotation as Euler angles
+        size: Scale as Vector
         normal_based: Whether to use normal-based mapping variant
         cap: Whether to use capped variant (cylindrical only)
 
     Returns:
         Tuple of (effective_mapping_type, vertices) where vertices is a list of
-        (x, y, z) tuples for LINES primitive drawing.
+        Vectors for LINES primitive drawing.
     """
     # Determine the effective mapping type based on normal_based and cap flags
     effective_mapping_type = _get_effective_mapping_type(

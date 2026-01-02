@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, cast
+
 import blf
 import bpy
 import gpu
 from bpy_extras.view3d_utils import location_3d_to_region_2d
 from gpu_extras.batch import batch_for_shader
 from mathutils import Euler, Matrix, Vector
+
+if TYPE_CHECKING:
+    from typing import TypeAlias
+
+    # Type alias for GPU batch vertex data - the stubs don't recognize list[Vector]
+    # but it's valid at runtime since Vector is a Sequence[float]
+    GPUVertexData: TypeAlias = dict[str, Any]
 
 from ..constants import (
     OVERLAY_COLOR,
@@ -34,8 +43,8 @@ _draw_handler: object | None = None
 _text_draw_handler: object | None = None
 
 # Cached label positions for text drawing (populated by 3D overlay, used by 2D text overlay)
-_cached_u_labels: list[tuple[float, float, float]] = []
-_cached_v_labels: list[tuple[float, float, float]] = []
+_cached_u_labels: list[Vector] = []
+_cached_v_labels: list[Vector] = []
 
 # Cached shader
 _shader: gpu.types.GPUShader | None = None
@@ -158,19 +167,19 @@ def _draw_overlay() -> None:  # noqa: PLR0912, PLR0915
     # For rotation, we need to combine object rotation with UV map rotation
     obj_rotation = obj_matrix.to_euler()
     uv_rotation = Euler(rotation, "XYZ")  # type: ignore[arg-type]
-    combined_rotation = (
+    combined_rotation = Euler((
         obj_rotation.x + uv_rotation.x,
         obj_rotation.y + uv_rotation.y,
         obj_rotation.z + uv_rotation.z,
-    )
+    ), "XYZ")
 
     # For size, scale by object scale
     obj_scale = obj_matrix.to_scale()
-    world_size = (
+    world_size = Vector((
         size[0] * obj_scale.x,  # type: ignore[index]
         size[1] * obj_scale.y,  # type: ignore[index]
         size[2] * obj_scale.z,  # type: ignore[index]
-    )
+    ))
 
     # Generate vertices based on mapping type
     # Check if normal-based mapping is enabled (for cylindrical, spherical, shrink wrap)
@@ -181,9 +190,9 @@ def _draw_overlay() -> None:  # noqa: PLR0912, PLR0915
     # For position-based mappings, use the world position from the UV map parameters
     if normal_based:
         obj_origin = obj_matrix @ Vector((0.0, 0.0, 0.0))
-        projection_position = (obj_origin.x, obj_origin.y, obj_origin.z)
+        projection_position = obj_origin
     else:
-        projection_position = (world_position.x, world_position.y, world_position.z)
+        projection_position = world_position
 
     # Generate projection wireframe vertices
     effective_mapping_type, vertices = generate_projection_vertices(
@@ -204,7 +213,7 @@ def _draw_overlay() -> None:  # noqa: PLR0912, PLR0915
 
     # Draw wireframe using POLYLINE shader for smooth anti-aliased lines
     shader = _get_shader()
-    batch = batch_for_shader(shader, "LINES", {"pos": vertices})
+    batch = batch_for_shader(shader, "LINES", cast("GPUVertexData", {"pos": vertices}))
 
     # Enable blending and disable depth test so overlay is always visible
     gpu.state.blend_set("ALPHA")
@@ -220,7 +229,7 @@ def _draw_overlay() -> None:  # noqa: PLR0912, PLR0915
     # Draw UV direction indicators (yellow lines showing U and V axes)
     # Normal-based overlays use half scale (same as shape wireframe)
     direction_size = (
-        (world_size[0] * 0.5, world_size[1] * 0.5, world_size[2] * 0.5)
+        world_size * 0.5
         if normal_based
         else world_size
     )
@@ -248,28 +257,36 @@ def _draw_overlay() -> None:  # noqa: PLR0912, PLR0915
 
     # Draw U direction line (yellow)
     if u_dir_vertices:
-        u_batch = batch_for_shader(shader, "LINES", {"pos": u_dir_vertices})
+        u_batch = batch_for_shader(
+            shader, "LINES", cast("GPUVertexData", {"pos": u_dir_vertices})
+        )
         shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH)
         shader.uniform_float("color", OVERLAY_U_DIRECTION_COLOR)
         u_batch.draw(shader)
 
     # Draw V direction line (yellow-green)
     if v_dir_vertices:
-        v_batch = batch_for_shader(shader, "LINES", {"pos": v_dir_vertices})
+        v_batch = batch_for_shader(
+            shader, "LINES", cast("GPUVertexData", {"pos": v_dir_vertices})
+        )
         shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH)
         shader.uniform_float("color", OVERLAY_V_DIRECTION_COLOR)
         v_batch.draw(shader)
 
     # Draw projected U line (dashed, same color as U but thinner)
     if u_proj_vertices:
-        u_proj_batch = batch_for_shader(shader, "LINES", {"pos": u_proj_vertices})
+        u_proj_batch = batch_for_shader(
+            shader, "LINES", cast("GPUVertexData", {"pos": u_proj_vertices})
+        )
         shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH * 0.7)
         shader.uniform_float("color", OVERLAY_U_DIRECTION_COLOR)
         u_proj_batch.draw(shader)
 
     # Draw projected V line (dashed, same color as V but thinner)
     if v_proj_vertices:
-        v_proj_batch = batch_for_shader(shader, "LINES", {"pos": v_proj_vertices})
+        v_proj_batch = batch_for_shader(
+            shader, "LINES", cast("GPUVertexData", {"pos": v_proj_vertices})
+        )
         shader.uniform_float("lineWidth", OVERLAY_UV_DIRECTION_LINE_WIDTH * 0.7)
         shader.uniform_float("color", OVERLAY_V_DIRECTION_COLOR)
         v_proj_batch.draw(shader)
@@ -310,7 +327,7 @@ def _draw_text_overlay() -> None:
 
     # Draw U labels
     for pos_3d in _cached_u_labels:
-        pos_2d = location_3d_to_region_2d(region, rv3d, Vector(pos_3d))
+        pos_2d = location_3d_to_region_2d(region, rv3d, pos_3d)
         if pos_2d is not None:
             blf.position(
                 font_id,
@@ -323,7 +340,7 @@ def _draw_text_overlay() -> None:
 
     # Draw V labels
     for pos_3d in _cached_v_labels:
-        pos_2d = location_3d_to_region_2d(region, rv3d, Vector(pos_3d))
+        pos_2d = location_3d_to_region_2d(region, rv3d, pos_3d)
         if pos_2d is not None:
             blf.position(
                 font_id,

@@ -19,12 +19,12 @@ def generate_box_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Generate box (tri-planar) UV direction indicators."""
     # +Z face (top)

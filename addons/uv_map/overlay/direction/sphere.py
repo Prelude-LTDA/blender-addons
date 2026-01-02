@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 from .inverse import inverse_uv_spherical
 from .utils import generate_uv_direction_line
@@ -18,12 +18,12 @@ def generate_spherical_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Generate spherical UV direction indicators."""
     v_equator = 0.0
@@ -119,12 +119,12 @@ def generate_spherical_normal_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Generate spherical normal-based UV direction indicators."""
     v_equator = 0.0

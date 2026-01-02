@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 from .inverse import inverse_uv_shrink_wrap
 from .utils import generate_uv_direction_line
@@ -18,12 +18,12 @@ def generate_shrink_wrap_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Generate shrink wrap UV direction indicators."""
     # U line
@@ -116,12 +116,12 @@ def generate_shrink_wrap_normal_direction(
     u_flip: bool,
     v_flip: bool,
     transform: Matrix,
-    u_vertices: list[tuple[float, float, float]],
-    v_vertices: list[tuple[float, float, float]],
-    u_proj_vertices: list[tuple[float, float, float]],
-    v_proj_vertices: list[tuple[float, float, float]],
-    u_labels: list[tuple[float, float, float]],
-    v_labels: list[tuple[float, float, float]],
+    u_vertices: list[Vector],
+    v_vertices: list[Vector],
+    u_proj_vertices: list[Vector],
+    v_proj_vertices: list[Vector],
+    u_labels: list[Vector],
+    v_labels: list[Vector],
 ) -> None:
     """Generate shrink wrap normal-based UV direction indicators."""
     verts, endpoint = generate_uv_direction_line(

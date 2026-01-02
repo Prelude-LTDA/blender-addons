@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from mathutils import Vector
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from mathutils import Matrix, Vector
+    from mathutils import Matrix
 
 
 def compute_adaptive_segments(u_tile: float, v_tile: float, base_segments: int) -> int:
@@ -48,7 +50,7 @@ def generate_uv_direction_line(
     v_flip: bool,
     transform: Matrix,
     dashed: bool = False,
-) -> tuple[list[tuple[float, float, float]], tuple[float, float, float]]:
+) -> tuple[list[Vector], Vector]:
     """Generate a curved line in 3D space by sampling UV coordinates.
 
     Args:
@@ -63,8 +65,8 @@ def generate_uv_direction_line(
     Returns:
         Tuple of (vertex list for LINES primitive, endpoint position for label)
     """
-    vertices: list[tuple[float, float, float]] = []
-    endpoint: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    vertices: list[Vector] = []
+    endpoint: Vector = Vector((0.0, 0.0, 0.0))
 
     # For dashed lines, use more segments to create finer dashes
     if dashed:
@@ -90,7 +92,7 @@ def generate_uv_direction_line(
                     v_flip,
                 )
                 t2_vec = transform @ p2
-                endpoint = (t2_vec.x, t2_vec.y, t2_vec.z)
+                endpoint = Vector((t2_vec.x, t2_vec.y, t2_vec.z))
             continue
 
         t1 = i / segments
@@ -111,11 +113,11 @@ def generate_uv_direction_line(
         t1_vec = transform @ p1
         t2_vec = transform @ p2
 
-        vertices.append((t1_vec.x, t1_vec.y, t1_vec.z))
-        vertices.append((t2_vec.x, t2_vec.y, t2_vec.z))
+        vertices.append(Vector((t1_vec.x, t1_vec.y, t1_vec.z)))
+        vertices.append(Vector((t2_vec.x, t2_vec.y, t2_vec.z)))
 
         # Store the last endpoint for label positioning
         if i == segments - 1:
-            endpoint = (t2_vec.x, t2_vec.y, t2_vec.z)
+            endpoint = Vector((t2_vec.x, t2_vec.y, t2_vec.z))
 
     return vertices, endpoint

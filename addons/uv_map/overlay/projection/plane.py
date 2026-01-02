@@ -6,20 +6,15 @@ from mathutils import Euler, Matrix, Vector
 
 
 def generate_plane_vertices(
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
-) -> list[tuple[float, float, float]]:
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
+) -> list[Vector]:
     """Generate vertices for a plane outline."""
-    # Create transform matrix: Translation * Rotation * Scale (TRS)
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    scale_vec = Vector(size)
-
     # Build full TRS matrix
-    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    scale_matrix = Matrix.Diagonal(size.to_4d())
     transform = (
-        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+        Matrix.Translation(position) @ rotation.to_matrix().to_4x4() @ scale_matrix
     )
 
     # Plane corners (in XY plane, centered at origin)
@@ -31,13 +26,13 @@ def generate_plane_vertices(
     ]
 
     # Transform vertices
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
     for i, corner in enumerate(corners):
         transformed = transform @ corner
-        vertices.append((transformed.x, transformed.y, transformed.z))
+        vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
         # Add next corner for line
         next_corner = corners[(i + 1) % 4]
         transformed_next = transform @ next_corner
-        vertices.append((transformed_next.x, transformed_next.y, transformed_next.z))
+        vertices.append(Vector((transformed_next.x, transformed_next.y, transformed_next.z)))
 
     return vertices

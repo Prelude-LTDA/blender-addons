@@ -6,19 +6,15 @@ from mathutils import Euler, Matrix, Vector
 
 
 def generate_box_vertices(
-    position: tuple[float, float, float],
-    rotation: tuple[float, float, float],
-    size: tuple[float, float, float],
-) -> list[tuple[float, float, float]]:
+    position: Vector,
+    rotation: Euler,
+    size: Vector,
+) -> list[Vector]:
     """Generate vertices for a box wireframe."""
-    pos_vec = Vector(position)
-    rot_euler = Euler(rotation, "XYZ")
-    scale_vec = Vector(size)
-
     # Build full TRS matrix
-    scale_matrix = Matrix.Diagonal(scale_vec.to_4d())
+    scale_matrix = Matrix.Diagonal(size.to_4d())
     transform = (
-        Matrix.Translation(pos_vec) @ rot_euler.to_matrix().to_4x4() @ scale_matrix
+        Matrix.Translation(position) @ rotation.to_matrix().to_4x4() @ scale_matrix
     )
 
     # Box corners
@@ -49,11 +45,11 @@ def generate_box_vertices(
         (3, 7),  # Vertical edges
     ]
 
-    vertices: list[tuple[float, float, float]] = []
+    vertices: list[Vector] = []
     for i1, i2 in edges:
         for idx in (i1, i2):
             corner = corners[idx]
             transformed = transform @ corner
-            vertices.append((transformed.x, transformed.y, transformed.z))
+            vertices.append(Vector((transformed.x, transformed.y, transformed.z)))
 
     return vertices
